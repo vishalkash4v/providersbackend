@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Provider Backend App</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #f8fafc;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Animated background orbs */
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(80px);
+      opacity: 0.4;
+      animation: float 12s ease-in-out infinite;
+    }
+
+    .orb-1 {
+      width: 400px;
+      height: 400px;
+      background: #3b82f6;
+      top: -100px;
+      left: -100px;
+      animation-delay: 0s;
+    }
+
+    .orb-2 {
+      width: 350px;
+      height: 350px;
+      background: #8b5cf6;
+      bottom: -80px;
+      right: -80px;
+      animation-delay: 3s;
+    }
+
+    .orb-3 {
+      width: 250px;
+      height: 250px;
+      background: #06b6d4;
+      top: 40%;
+      right: 15%;
+      animation-delay: 6s;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      33% { transform: translate(30px, -40px) scale(1.05); }
+      66% { transform: translate(-20px, 20px) scale(0.95); }
+    }
+
+    /* Main card */
+    .card {
+      position: relative;
+      z-index: 10;
+      background: rgba(30, 41, 59, 0.7);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      border-radius: 24px;
+      padding: 48px 56px;
+      max-width: 520px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      animation: fadeUp 0.8s ease-out forwards;
+      opacity: 0;
+    }
+
+    @keyframes fadeUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* Logo / Icon */
+    .logo {
+      width: 72px;
+      height: 72px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      border-radius: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 28px;
+      font-size: 32px;
+      box-shadow: 0 10px 25px rgba(59, 130, 246, 0.4);
+      animation: pulse 2.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); box-shadow: 0 10px 25px rgba(59, 130, 246, 0.4); }
+      50% { transform: scale(1.05); box-shadow: 0 15px 35px rgba(59, 130, 246, 0.55); }
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+      background: linear-gradient(90deg, #60a5fa, #a78bfa, #22d3ee);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.5px;
+    }
+
+    .subtitle {
+      font-size: 1.05rem;
+      color: #94a3b8;
+      margin-bottom: 32px;
+      line-height: 1.6;
+    }
+
+    /* Status badge */
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      padding: 8px 16px;
+      border-radius: 50px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 36px;
+      border: 1px solid rgba(34, 197, 94, 0.25);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      background: #4ade80;
+      border-radius: 50%;
+      animation: blink 1.5s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Info grid */
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 8px;
+    }
+
+    .info-item {
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      border-radius: 14px;
+      padding: 16px;
+      transition: all 0.3s ease;
+    }
+
+    .info-item:hover {
+      background: rgba(15, 23, 42, 0.8);
+      border-color: rgba(59, 130, 246, 0.3);
+      transform: translateY(-3px);
+    }
+
+    .info-label {
+      font-size: 0.75rem;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .info-value {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    /* Footer */
+    .footer {
+      margin-top: 36px;
+      font-size: 0.8rem;
+      color: #64748b;
+    }
+
+    /* Responsive */
+    @media (max-width: 480px) {
+      .card {
+        padding: 36px 24px;
+      }
+      h1 {
+        font-size: 1.6rem;
+      }
+      .info-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Background orbs -->
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+
+  <div class="card">
+    <div class="logo">⚡</div>
+
+    <h1>Welcome to Provider Backend</h1>
+    <p class="subtitle">
+      Your secure and powerful backend service is up and running.
+    </p>
+
+    <div class="status">
+      <span class="status-dot"></span>
+      Server is Online
+    </div>
+
+    <div class="info-grid">
+      <div class="info-item">
+        <div class="info-label">Environment</div>
+        <div class="info-value"><%= process.env.NODE_ENV || 'development' %></div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">Status</div>
+        <div class="info-value">Active</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">Framework</div>
+        <div class="info-value">Express + EJS</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">Version</div>
+        <div class="info-value">1.0.0</div>
+      </div>
+    </div>
+
+    <div class="footer">
+      Provider Backend App • Powered by Node.js
+    </div>
+  </div>
+</body>
+</html>

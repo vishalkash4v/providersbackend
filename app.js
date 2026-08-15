@@ -60,6 +60,14 @@ app.use(function(err, req, res, next) {
   res.render('error');
 });
 
+/* GET home page. */
+router.get('/', function(req, res, next) {
+  res.render('welcome', { 
+    title: 'Provider Backend App',
+    env: process.env.NODE_ENV || 'development'
+  });
+});
+
 
 
 server.listen(port);
