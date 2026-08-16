@@ -1,825 +1,1547 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
-const { generateToken } = require('../middleware/jwt');
-const sendEmail = require('../utils/sendEmail');
-const { validate } = require('../utils/fieldValidations');
 
 const {
-    generateReferralCode,
+  generateToken,
+} = require('../middleware/jwt');
+
+const sendEmail = require('../utils/sendEmail');
+
+const {
+  validate,
+} = require('../utils/fieldValidations');
+
+const {
+  generateReferralCode,
 } = require('../utils/referral');
+
 
 module.exports = {
 
-    // ======================= REGISTER =======================
-    register: async (req, res) => {
-        try {
-            const required = [
-                'firstName',
-                'lastName',
-                'mobile',
-                'email',
-                'password',
-                'confirmPassword',
-                'role',
-            ];
-
-            if (validate(req, res, required)) return;
-
-            const {
-                firstName,
-                lastName,
-                mobile,
-                email,
-                password,
-                confirmPassword,
-                role,
-
-                // Optional location
-                latitude,
-                longitude,
-                locationName,
-
-                // Optional referral code
-                referralCode: enteredReferralCode,
-            } = req.body;
-
-            // ======================= PASSWORD =======================
-
-            if (password !== confirmPassword) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Password and confirm password do not match',
-                });
-            }
-
-            // ======================= CHECK EXISTING USER =======================
-
-            const existingUser = await User.findOne({
-                $or: [{ email }, { mobile }],
-            });
-
-            if (existingUser) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Email or Mobile number already registered',
-                });
-            }
-
-            // ======================= REFERRAL =======================
-
-            let referredBy = null;
-
-            if (enteredReferralCode) {
-                const referringUser = await User.findOne({
-                    referralCode: enteredReferralCode
-                        .trim()
-                        .toUpperCase(),
-                    isActive: true,
-                });
-
-                if (!referringUser) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Invalid referral code',
-                    });
-                }
-
-                referredBy = referringUser._id;
-            }
-
-            // ======================= GENERATE OWN REFERRAL CODE =======================
-
-            let userReferralCode;
-
-            while (true) {
-                userReferralCode = generateReferralCode();
-
-                const existingReferralCode = await User.findOne({
-                    referralCode: userReferralCode,
-                });
-
-                if (!existingReferralCode) {
-                    break;
-                }
-            }
-
-            // ======================= PASSWORD HASH =======================
-
-            const hashedPassword = await bcrypt.hash(password, 12);
-
-            // ======================= OTP =======================
-
-            const otp = Math.floor(
-                1000 + Math.random() * 9000
-            ).toString();
-
-            const otpExpires = new Date(
-                Date.now() + 10 * 60 * 1000
-            );
+  // ============================================================
+  // REGISTER
+  // ============================================================
+
+  register: async (req, res) => {
+    try {
 
-            // ======================= LOCATION =======================
+      const required = [
+        'firstName',
+        'lastName',
+        'mobile',
+        'email',
+        'password',
+        'confirmPassword',
+        'role',
+      ];
 
-            let location;
+      if (validate(req, res, required)) {
+        return;
+      }
 
-            const hasLatitude =
-                latitude !== undefined &&
-                latitude !== null &&
-                latitude !== '';
 
-            const hasLongitude =
-                longitude !== undefined &&
-                longitude !== null &&
-                longitude !== '';
+      const {
+        firstName,
+        lastName,
+        mobile,
+        email,
+        password,
+        confirmPassword,
+        role,
 
-            if (hasLatitude || hasLongitude) {
+        // Optional location
+        latitude,
+        longitude,
+        locationName,
 
-                if (!hasLatitude || !hasLongitude) {
-                    return res.status(400).json({
-                        success: false,
-                        message:
-                            'Both latitude and longitude are required',
-                    });
-                }
+        // Optional referral code entered by new user
+        referralCode: enteredReferralCode,
 
-                const lat = Number(latitude);
-                const lng = Number(longitude);
+      } = req.body;
 
-                if (
-                    Number.isNaN(lat) ||
-                    Number.isNaN(lng)
-                ) {
-                    return res.status(400).json({
-                        success: false,
-                        message:
-                            'Latitude and longitude must be valid numbers',
-                    });
-                }
 
-                if (lat < -90 || lat > 90) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Invalid latitude',
-                    });
-                }
+      // ========================================================
+      // PASSWORD VALIDATION
+      // ========================================================
 
-                if (lng < -180 || lng > 180) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Invalid longitude',
-                    });
-                }
+      if (password !== confirmPassword) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Password and confirm password do not match',
+        });
+      }
 
-                location = {
-                    type: 'Point',
 
-                    // IMPORTANT:
-                    // GeoJSON = [longitude, latitude]
-                    coordinates: [lng, lat],
+      // ========================================================
+      // CHECK EXISTING USER
+      // ========================================================
 
-                    name: locationName
-                        ? locationName.trim()
-                        : null,
-                };
-            }
+      const normalizedEmail =
+        email.trim().toLowerCase();
 
-            // ======================= CREATE USER =======================
+      const normalizedMobile =
+        mobile.trim();
 
-            const user = await User.create({
-                firstName: firstName.trim(),
-                lastName: lastName.trim(),
-                mobile: mobile.trim(),
-                email: email.trim().toLowerCase(),
 
-                password: hashedPassword,
+      const existingUser = await User.findOne({
+        $or: [
+          {
+            email: normalizedEmail,
+          },
+          {
+            mobile: normalizedMobile,
+          },
+        ],
+      });
 
-                role: Number(role),
 
-                // User's own referral code
-                referralCode: userReferralCode,
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Email or Mobile number already registered',
+        });
+      }
 
-                // User who referred this user
-                referredBy,
 
-                // Optional location
-                location,
+      // ========================================================
+      // REFERRAL
+      // ========================================================
 
-                otp,
-                otpExpires,
+      let referredBy = null;
 
-                isVerified: false,
-            });
 
-            // ======================= SEND OTP =======================
+      if (
+        enteredReferralCode &&
+        enteredReferralCode.trim() !== ''
+      ) {
 
-            await sendEmail({
-                email: user.email,
+        const normalizedReferralCode =
+          enteredReferralCode
+            .trim()
+            .toUpperCase();
 
-                subject: 'OTP Verification - Provider App',
 
-                html: `
-                    <h2>Hello ${user.firstName},</h2>
+        const referringUser =
+          await User.findOne({
+            referralCode:
+              normalizedReferralCode,
 
-                    <p>Your OTP for verification is:</p>
+            isActive: true,
+          });
 
-                    <h1 style="letter-spacing: 5px;">
-                        ${otp}
-                    </h1>
 
-                    <p>
-                        This OTP is valid for 10 minutes.
-                    </p>
-                `,
-            });
-
-            // ======================= GENERATE JWT =======================
-
-            const token = generateToken(user);
-
-            // ======================= RESPONSE =======================
-
-            return res.status(201).json({
-                success: true,
-
-                message:
-                    'Registration successful. OTP sent to your email.',
-
-                token,
-
-                data: {
-                    userId: user._id,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    email: user.email,
-                    mobile: user.mobile,
-                    role: user.role,
-
-                    // User's own referral code
-                    referralCode: user.referralCode,
-
-                    // User who referred this user
-                    referredBy: user.referredBy,
-
-                    // Location
-                    location: user.location || null,
-
-                    isVerified: user.isVerified,
-                },
-            });
-
-        } catch (error) {
-            console.error('Register Error:', error);
-
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message,
-            });
+        if (!referringUser) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid referral code',
+          });
         }
-    },
 
 
-    // ======================= VERIFY OTP =======================
-    verifyOtp: async (req, res) => {
-        try {
-            const required = ['email', 'otp'];
+        referredBy =
+          referringUser._id;
+      }
 
-            if (validate(req, res, required)) return;
 
-            const { email, otp } = req.body;
+      // ========================================================
+      // GENERATE UNIQUE REFERRAL CODE FOR NEW USER
+      // ========================================================
 
-            const user = await User.findOne({ email });
+      let userReferralCode;
 
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'User not found',
-                });
-            }
 
-            if (user.isVerified) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'User already verified',
-                });
-            }
+      while (true) {
 
-            if (user.otp !== otp) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Invalid OTP',
-                });
-            }
+        userReferralCode =
+          generateReferralCode();
 
-            if (user.otpExpires < new Date()) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'OTP has expired',
-                });
-            }
 
-            user.isVerified = true;
-            user.otp = undefined;
-            user.otpExpires = undefined;
+        const existingReferralCode =
+          await User.findOne({
+            referralCode:
+              userReferralCode,
+          });
 
-            await user.save();
 
-            // Generate JWT after OTP verification
-            const token = generateToken(user);
-
-            return res.status(200).json({
-                success: true,
-                message: 'OTP verified successfully',
-
-                token,
-
-                data: {
-                    id: user._id,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    email: user.email,
-                    mobile: user.mobile,
-                    role: user.role,
-                    referralCode: user.referralCode,
-                    referredBy: user.referredBy,
-                    location: user.location || null,
-                    profileImage: user.profileImage,
-                    isVerified: user.isVerified,
-                },
-            });
-
-        } catch (error) {
-            console.error('Verify OTP Error:', error);
-
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message,
-            });
+        if (!existingReferralCode) {
+          break;
         }
-    },
+      }
 
 
-    // ======================= RESEND OTP =======================
-    resendOtp: async (req, res) => {
-        try {
-            const required = ['email'];
+      // ========================================================
+      // HASH PASSWORD
+      // ========================================================
 
-            if (validate(req, res, required)) return;
+      const hashedPassword =
+        await bcrypt.hash(
+          password,
+          12
+        );
 
-            const { email } = req.body;
 
-            const user = await User.findOne({ email });
+      // ========================================================
+      // GENERATE OTP
+      // ========================================================
 
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'User not found',
-                });
-            }
+      const otp =
+        Math.floor(
+          1000 +
+          Math.random() * 9000
+        ).toString();
 
-            if (user.isVerified) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'User already verified',
-                });
-            }
 
-            const otp = Math.floor(
-                1000 + Math.random() * 9000
-            ).toString();
+      const otpExpires =
+        new Date(
+          Date.now() +
+          10 * 60 * 1000
+        );
 
-            const otpExpires = new Date(
-                Date.now() + 10 * 60 * 1000
-            );
 
-            user.otp = otp;
-            user.otpExpires = otpExpires;
+      // ========================================================
+      // LOCATION
+      // ========================================================
 
-            await user.save();
+      /*
+       * LOCATION IS COMPLETELY OPTIONAL.
+       *
+       * No latitude + no longitude
+       * => location remains undefined.
+       *
+       * Therefore MongoDB will NOT receive:
+       *
+       * location: {}
+       *
+       * or
+       *
+       * location: { name: null }
+       *
+       * or
+       *
+       * location: { type: 'Point' }
+       */
 
-            await sendEmail({
-                email: user.email,
 
-                subject: 'Resend OTP - Provider App',
+      let location;
 
-                html: `
-                    <h2>Hello ${user.firstName},</h2>
 
-                    <p>Your new OTP is:</p>
+      const hasLatitude =
+        latitude !== undefined &&
+        latitude !== null &&
+        latitude !== '';
 
-                    <h1 style="letter-spacing: 5px;">
-                        ${otp}
-                    </h1>
 
-                    <p>
-                        This OTP is valid for 10 minutes.
-                    </p>
-                `,
-            });
+      const hasLongitude =
+        longitude !== undefined &&
+        longitude !== null &&
+        longitude !== '';
 
-            return res.status(200).json({
-                success: true,
-                message: 'OTP resent successfully',
-            });
 
-        } catch (error) {
-            console.error('Resend OTP Error:', error);
+      const hasLocationName =
+        locationName !== undefined &&
+        locationName !== null &&
+        locationName.trim() !== '';
 
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message,
-            });
+
+      // --------------------------------------------------------
+      // If ANY location information is sent,
+      // latitude + longitude must both be present.
+      // --------------------------------------------------------
+
+      if (
+        hasLatitude ||
+        hasLongitude ||
+        hasLocationName
+      ) {
+
+        if (
+          !hasLatitude ||
+          !hasLongitude
+        ) {
+
+          return res.status(400).json({
+            success: false,
+            message:
+              'Both latitude and longitude are required when providing location',
+          });
         }
-    },
 
 
-    // ======================= LOGIN =======================
-    login: async (req, res) => {
-        try {
-            const required = [
-                'email',
-                'password',
-            ];
+        const lat =
+          Number(latitude);
 
-            if (validate(req, res, required)) return;
+        const lng =
+          Number(longitude);
 
-            const { email, password } = req.body;
 
-            const user = await User.findOne({ email });
+        // ------------------------------------------------------
+        // Validate number
+        // ------------------------------------------------------
 
-            if (!user) {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Invalid email or password',
-                });
-            }
+        if (
+          !Number.isFinite(lat) ||
+          !Number.isFinite(lng)
+        ) {
 
-            if (!user.isVerified) {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Please verify your account first',
-                });
-            }
-
-            if (!user.isActive) {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Your account has been deactivated',
-                });
-            }
-
-            const isMatch = await bcrypt.compare(
-                password,
-                user.password
-            );
-
-            if (!isMatch) {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Invalid email or password',
-                });
-            }
-
-            // Generate JWT
-            const token = generateToken(user);
-
-            return res.status(200).json({
-                success: true,
-                message: 'Login successful',
-
-                token,
-
-                data: {
-                    id: user._id,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    email: user.email,
-                    mobile: user.mobile,
-                    role: user.role,
-
-                    referralCode: user.referralCode,
-                    referredBy: user.referredBy,
-
-                    location: user.location || null,
-
-                    profileImage: user.profileImage,
-
-                    isVerified: user.isVerified,
-                    isActive: user.isActive,
-                },
-            });
-
-        } catch (error) {
-            console.error('Login Error:', error);
-
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message,
-            });
+          return res.status(400).json({
+            success: false,
+            message:
+              'Latitude and longitude must be valid numbers',
+          });
         }
-    },
 
 
-    // ======================= LOGOUT =======================
-    logout: async (req, res) => {
-        try {
-            return res.status(200).json({
-                success: true,
-                message: 'Logged out successfully',
-            });
+        // ------------------------------------------------------
+        // Validate latitude
+        // ------------------------------------------------------
 
-        } catch (error) {
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-            });
+        if (
+          lat < -90 ||
+          lat > 90
+        ) {
+
+          return res.status(400).json({
+            success: false,
+            message:
+              'Latitude must be between -90 and 90',
+          });
         }
-    },
 
 
-    // ======================= CHANGE PASSWORD =======================
-    changePassword: async (req, res) => {
-        try {
-            const required = [
-                'oldPassword',
-                'newPassword',
-                'confirmPassword',
-            ];
+        // ------------------------------------------------------
+        // Validate longitude
+        // ------------------------------------------------------
 
-            if (validate(req, res, required)) return;
+        if (
+          lng < -180 ||
+          lng > 180
+        ) {
 
-            const {
-                oldPassword,
-                newPassword,
-                confirmPassword,
-            } = req.body;
-
-            const userId = req.user.id;
-
-            if (newPassword !== confirmPassword) {
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        'New password and confirm password do not match',
-                });
-            }
-
-            const user = await User.findById(userId);
-
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'User not found',
-                });
-            }
-
-            const isMatch = await bcrypt.compare(
-                oldPassword,
-                user.password
-            );
-
-            if (!isMatch) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Old password is incorrect',
-                });
-            }
-
-            user.password = await bcrypt.hash(
-                newPassword,
-                12
-            );
-
-            await user.save();
-
-            return res.status(200).json({
-                success: true,
-                message: 'Password changed successfully',
-            });
-
-        } catch (error) {
-            console.error(
-                'Change Password Error:',
-                error
-            );
-
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message,
-            });
+          return res.status(400).json({
+            success: false,
+            message:
+              'Longitude must be between -180 and 180',
+          });
         }
-    },
 
 
-    // ======================= FORGOT PASSWORD =======================
-    forgotPassword: async (req, res) => {
-        try {
-            const required = ['email'];
+        // ------------------------------------------------------
+        // Create valid GeoJSON Point
+        //
+        // IMPORTANT:
+        // GeoJSON = [longitude, latitude]
+        // ------------------------------------------------------
 
-            if (validate(req, res, required)) return;
+        location = {
+          type: 'Point',
 
-            const { email } = req.body;
+          coordinates: [
+            lng,
+            lat,
+          ],
+        };
 
-            const user = await User.findOne({ email });
 
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'User not found',
-                });
-            }
-
-            const otp = Math.floor(
-                1000 + Math.random() * 9000
-            ).toString();
-
-            const otpExpires = new Date(
-                Date.now() + 10 * 60 * 1000
-            );
-
-            user.otp = otp;
-            user.otpExpires = otpExpires;
-
-            await user.save();
-
-            await sendEmail({
-                email: user.email,
-
-                subject:
-                    'Forgot Password OTP - Provider App',
-
-                html: `
-                    <h2>Hello ${user.firstName},</h2>
-
-                    <p>
-                        Your OTP for password reset is:
-                    </p>
-
-                    <h1 style="letter-spacing: 5px;">
-                        ${otp}
-                    </h1>
-
-                    <p>
-                        This OTP is valid for 10 minutes.
-                    </p>
-                `,
-            });
-
-            return res.status(200).json({
-                success: true,
-                message: 'OTP sent to your email',
-            });
-
-        } catch (error) {
-            console.error(
-                'Forgot Password Error:',
-                error
-            );
-
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message,
-            });
+        // Location name is optional
+        if (hasLocationName) {
+          location.name =
+            locationName.trim();
         }
-    },
+      }
 
 
-    // ======================= RESET PASSWORD =======================
-    resetPassword: async (req, res) => {
-        try {
-            const required = [
-                'email',
-                'otp',
-                'newPassword',
-                'confirmPassword',
-            ];
+      // ========================================================
+      // CREATE USER
+      // ========================================================
 
-            if (validate(req, res, required)) return;
+      const userData = {
 
-            const {
-                email,
-                otp,
-                newPassword,
-                confirmPassword,
-            } = req.body;
+        firstName:
+          firstName.trim(),
 
-            if (newPassword !== confirmPassword) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Passwords do not match',
-                });
-            }
+        lastName:
+          lastName.trim(),
 
-            const user = await User.findOne({ email });
+        mobile:
+          normalizedMobile,
 
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'User not found',
-                });
-            }
+        email:
+          normalizedEmail,
 
-            if (user.otp !== otp) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Invalid OTP',
-                });
-            }
+        password:
+          hashedPassword,
 
-            if (user.otpExpires < new Date()) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'OTP has expired',
-                });
-            }
+        role:
+          Number(role),
 
-            user.password = await bcrypt.hash(
-                newPassword,
-                12
-            );
+        // New user's own referral code
+        referralCode:
+          userReferralCode,
 
-            user.otp = undefined;
-            user.otpExpires = undefined;
+        // Existing user who referred them
+        referredBy:
 
-            await user.save();
+          referredBy,
 
-            // Generate a fresh token after password reset
-            const token = generateToken(user);
+        otp,
 
-            return res.status(200).json({
-                success: true,
-                message: 'Password reset successfully',
+        otpExpires,
 
-                token,
-
-                data: {
-                    id: user._id,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    email: user.email,
-                    mobile: user.mobile,
-                    role: user.role,
-                    referralCode: user.referralCode,
-                    referredBy: user.referredBy,
-                    location: user.location || null,
-                    profileImage: user.profileImage,
-                    isVerified: user.isVerified,
-                    isActive: user.isActive,
-                },
-            });
-
-        } catch (error) {
-            console.error(
-                'Reset Password Error:',
-                error
-            );
-
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message,
-            });
-        }
-    },
+        isVerified:
+          false,
+      };
 
 
-    // ======================= GET ME =======================
-    getMe: async (req, res) => {
-        try {
-            const user = await User.findById(
-                req.user.id
-            ).select(
-                '-password -otp -otpExpires'
-            );
+      /*
+       * VERY IMPORTANT:
+       *
+       * Only add location to userData if it actually exists.
+       *
+       * This prevents MongoDB from receiving
+       * an incomplete GeoJSON object.
+       */
 
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'User not found',
-                });
-            }
+      if (location) {
+        userData.location =
+          location;
+      }
 
-            return res.status(200).json({
-                success: true,
-                data: user,
-            });
 
-        } catch (error) {
-            console.error(
-                'Get Me Error:',
-                error
-            );
+      const user =
+        await User.create(
+          userData
+        );
 
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message,
-            });
-        }
-    },
+
+      // ========================================================
+      // SEND OTP
+      // ========================================================
+
+      await sendEmail({
+
+        email:
+          user.email,
+
+        subject:
+          'OTP Verification - Provider App',
+
+        html: `
+          <h2>Hello ${user.firstName},</h2>
+
+          <p>Your OTP for verification is:</p>
+
+          <h1 style="letter-spacing: 5px;">
+            ${otp}
+          </h1>
+
+          <p>
+            This OTP is valid for 10 minutes.
+          </p>
+        `,
+      });
+
+
+      // ========================================================
+      // GENERATE JWT
+      // ========================================================
+
+      const token =
+        generateToken(user);
+
+
+      // ========================================================
+      // RESPONSE
+      // ========================================================
+
+      return res.status(201).json({
+
+        success: true,
+
+        message:
+          'Registration successful. OTP sent to your email.',
+
+        token,
+
+        data: {
+
+          userId:
+            user._id,
+
+          firstName:
+            user.firstName,
+
+          lastName:
+            user.lastName,
+
+          email:
+            user.email,
+
+          mobile:
+            user.mobile,
+
+          role:
+            user.role,
+
+          // User's own referral code
+          referralCode:
+            user.referralCode,
+
+          // Referrer user ID
+          referredBy:
+            user.referredBy,
+
+          // Will be null/absent when no location
+          location:
+            user.location || null,
+
+          isVerified:
+            user.isVerified,
+
+        },
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Register Error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Something went wrong',
+
+        error:
+          error.message,
+
+      });
+    }
+  },
+
+
+  // ============================================================
+  // VERIFY OTP
+  // ============================================================
+
+  verifyOtp: async (req, res) => {
+
+    try {
+
+      const required = [
+        'email',
+        'otp',
+      ];
+
+
+      if (
+        validate(
+          req,
+          res,
+          required
+        )
+      ) {
+        return;
+      }
+
+
+      const {
+        email,
+        otp,
+      } = req.body;
+
+
+      const user =
+        await User.findOne({
+          email:
+            email.trim().toLowerCase(),
+        });
+
+
+      if (!user) {
+
+        return res.status(404).json({
+          success: false,
+          message:
+            'User not found',
+        });
+      }
+
+
+      if (user.isVerified) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'User already verified',
+        });
+      }
+
+
+      if (user.otp !== otp) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'Invalid OTP',
+        });
+      }
+
+
+      if (
+        !user.otpExpires ||
+        user.otpExpires < new Date()
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'OTP has expired',
+        });
+      }
+
+
+      user.isVerified =
+        true;
+
+      user.otp =
+        undefined;
+
+      user.otpExpires =
+        undefined;
+
+
+      await user.save();
+
+
+      const token =
+        generateToken(user);
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        message:
+          'OTP verified successfully',
+
+        token,
+
+        data: {
+
+          id:
+            user._id,
+
+          firstName:
+            user.firstName,
+
+          lastName:
+            user.lastName,
+
+          email:
+            user.email,
+
+          mobile:
+            user.mobile,
+
+          role:
+            user.role,
+
+          referralCode:
+            user.referralCode,
+
+          referredBy:
+            user.referredBy,
+
+          location:
+            user.location || null,
+
+          profileImage:
+            user.profileImage,
+
+          isVerified:
+            user.isVerified,
+
+        },
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Verify OTP Error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Something went wrong',
+
+        error:
+          error.message,
+
+      });
+    }
+  },
+
+
+  // ============================================================
+  // RESEND OTP
+  // ============================================================
+
+  resendOtp: async (req, res) => {
+
+    try {
+
+      const required = [
+        'email',
+      ];
+
+
+      if (
+        validate(
+          req,
+          res,
+          required
+        )
+      ) {
+        return;
+      }
+
+
+      const {
+        email,
+      } = req.body;
+
+
+      const user =
+        await User.findOne({
+          email:
+            email.trim().toLowerCase(),
+        });
+
+
+      if (!user) {
+
+        return res.status(404).json({
+          success: false,
+          message:
+            'User not found',
+        });
+      }
+
+
+      if (user.isVerified) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'User already verified',
+        });
+      }
+
+
+      const otp =
+        Math.floor(
+          1000 +
+          Math.random() * 9000
+        ).toString();
+
+
+      const otpExpires =
+        new Date(
+          Date.now() +
+          10 * 60 * 1000
+        );
+
+
+      user.otp =
+        otp;
+
+      user.otpExpires =
+        otpExpires;
+
+
+      await user.save();
+
+
+      await sendEmail({
+
+        email:
+          user.email,
+
+        subject:
+          'Resend OTP - Provider App',
+
+        html: `
+          <h2>Hello ${user.firstName},</h2>
+
+          <p>Your new OTP is:</p>
+
+          <h1 style="letter-spacing: 5px;">
+            ${otp}
+          </h1>
+
+          <p>
+            This OTP is valid for 10 minutes.
+          </p>
+        `,
+      });
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        message:
+          'OTP resent successfully',
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Resend OTP Error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Something went wrong',
+
+        error:
+          error.message,
+
+      });
+    }
+  },
+
+
+  // ============================================================
+  // LOGIN
+  // ============================================================
+
+  login: async (req, res) => {
+
+    try {
+
+      const required = [
+        'email',
+        'password',
+      ];
+
+
+      if (
+        validate(
+          req,
+          res,
+          required
+        )
+      ) {
+        return;
+      }
+
+
+      const {
+        email,
+        password,
+      } = req.body;
+
+
+      const user =
+        await User.findOne({
+          email:
+            email.trim().toLowerCase(),
+        });
+
+
+      if (!user) {
+
+        return res.status(401).json({
+          success: false,
+          message:
+            'Invalid email or password',
+        });
+      }
+
+
+      if (!user.isVerified) {
+
+        return res.status(401).json({
+          success: false,
+          message:
+            'Please verify your account first',
+        });
+      }
+
+
+      if (!user.isActive) {
+
+        return res.status(401).json({
+          success: false,
+          message:
+            'Your account has been deactivated',
+        });
+      }
+
+
+      const isMatch =
+        await bcrypt.compare(
+          password,
+          user.password
+        );
+
+
+      if (!isMatch) {
+
+        return res.status(401).json({
+          success: false,
+          message:
+            'Invalid email or password',
+        });
+      }
+
+
+      const token =
+        generateToken(user);
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        message:
+          'Login successful',
+
+        token,
+
+        data: {
+
+          id:
+            user._id,
+
+          firstName:
+            user.firstName,
+
+          lastName:
+            user.lastName,
+
+          email:
+            user.email,
+
+          mobile:
+            user.mobile,
+
+          role:
+            user.role,
+
+          referralCode:
+            user.referralCode,
+
+          referredBy:
+            user.referredBy,
+
+          location:
+            user.location || null,
+
+          profileImage:
+            user.profileImage,
+
+          isVerified:
+            user.isVerified,
+
+          isActive:
+            user.isActive,
+
+        },
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Login Error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Something went wrong',
+
+        error:
+          error.message,
+
+      });
+    }
+  },
+
+
+  // ============================================================
+  // FORGOT PASSWORD
+  // ============================================================
+
+  forgotPassword: async (req, res) => {
+
+    try {
+
+      const required = [
+        'email',
+      ];
+
+
+      if (
+        validate(
+          req,
+          res,
+          required
+        )
+      ) {
+        return;
+      }
+
+
+      const {
+        email,
+      } = req.body;
+
+
+      const user =
+        await User.findOne({
+          email:
+            email.trim().toLowerCase(),
+        });
+
+
+      if (!user) {
+
+        return res.status(404).json({
+          success: false,
+          message:
+            'User not found',
+        });
+      }
+
+
+      const otp =
+        Math.floor(
+          1000 +
+          Math.random() * 9000
+        ).toString();
+
+
+      const otpExpires =
+        new Date(
+          Date.now() +
+          10 * 60 * 1000
+        );
+
+
+      user.otp =
+        otp;
+
+      user.otpExpires =
+        otpExpires;
+
+
+      await user.save();
+
+
+      await sendEmail({
+
+        email:
+          user.email,
+
+        subject:
+          'Forgot Password OTP - Provider App',
+
+        html: `
+          <h2>Hello ${user.firstName},</h2>
+
+          <p>
+            Your OTP for password reset is:
+          </p>
+
+          <h1 style="letter-spacing: 5px;">
+            ${otp}
+          </h1>
+
+          <p>
+            This OTP is valid for 10 minutes.
+          </p>
+        `,
+      });
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        message:
+          'OTP sent to your email',
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Forgot Password Error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Something went wrong',
+
+        error:
+          error.message,
+
+      });
+    }
+  },
+
+
+  // ============================================================
+  // RESET PASSWORD
+  // ============================================================
+
+  resetPassword: async (req, res) => {
+
+    try {
+
+      const required = [
+        'email',
+        'otp',
+        'newPassword',
+        'confirmPassword',
+      ];
+
+
+      if (
+        validate(
+          req,
+          res,
+          required
+        )
+      ) {
+        return;
+      }
+
+
+      const {
+        email,
+        otp,
+        newPassword,
+        confirmPassword,
+      } = req.body;
+
+
+      if (
+        newPassword !==
+        confirmPassword
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'Passwords do not match',
+        });
+      }
+
+
+      const user =
+        await User.findOne({
+          email:
+            email.trim().toLowerCase(),
+        });
+
+
+      if (!user) {
+
+        return res.status(404).json({
+          success: false,
+          message:
+            'User not found',
+        });
+      }
+
+
+      if (user.otp !== otp) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'Invalid OTP',
+        });
+      }
+
+
+      if (
+        !user.otpExpires ||
+        user.otpExpires < new Date()
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'OTP has expired',
+        });
+      }
+
+
+      user.password =
+        await bcrypt.hash(
+          newPassword,
+          12
+        );
+
+
+      user.otp =
+        undefined;
+
+      user.otpExpires =
+        undefined;
+
+
+      await user.save();
+
+
+      // Fresh JWT after password reset
+      const token =
+        generateToken(user);
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        message:
+          'Password reset successfully',
+
+        token,
+
+        data: {
+
+          id:
+            user._id,
+
+          firstName:
+            user.firstName,
+
+          lastName:
+            user.lastName,
+
+          email:
+            user.email,
+
+          mobile:
+            user.mobile,
+
+          role:
+            user.role,
+
+          referralCode:
+            user.referralCode,
+
+          referredBy:
+            user.referredBy,
+
+          location:
+            user.location || null,
+
+          profileImage:
+            user.profileImage,
+
+          isVerified:
+            user.isVerified,
+
+          isActive:
+            user.isActive,
+
+        },
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Reset Password Error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Something went wrong',
+
+        error:
+          error.message,
+
+      });
+    }
+  },
+
+
+  // ============================================================
+  // GET LOGGED-IN USER
+  // ============================================================
+
+  getMe: async (req, res) => {
+
+    try {
+
+      const user =
+        await User.findById(
+          req.user.id
+        ).select(
+          '-password -otp -otpExpires'
+        );
+
+
+      if (!user) {
+
+        return res.status(404).json({
+          success: false,
+          message:
+            'User not found',
+        });
+      }
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        data:
+          user,
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Get Me Error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Something went wrong',
+
+        error:
+          error.message,
+
+      });
+    }
+  },
+
+
+  // ============================================================
+  // CHANGE PASSWORD
+  // ============================================================
+
+  changePassword: async (req, res) => {
+
+    try {
+
+      const required = [
+        'oldPassword',
+        'newPassword',
+        'confirmPassword',
+      ];
+
+
+      if (
+        validate(
+          req,
+          res,
+          required
+        )
+      ) {
+        return;
+      }
+
+
+      const {
+        oldPassword,
+        newPassword,
+        confirmPassword,
+      } = req.body;
+
+
+      const userId =
+        req.user.id;
+
+
+      if (
+        newPassword !==
+        confirmPassword
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'New password and confirm password do not match',
+        });
+      }
+
+
+      const user =
+        await User.findById(
+          userId
+        );
+
+
+      if (!user) {
+
+        return res.status(404).json({
+          success: false,
+          message:
+            'User not found',
+        });
+      }
+
+
+      const isMatch =
+        await bcrypt.compare(
+          oldPassword,
+          user.password
+        );
+
+
+      if (!isMatch) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            'Old password is incorrect',
+        });
+      }
+
+
+      user.password =
+        await bcrypt.hash(
+          newPassword,
+          12
+        );
+
+
+      await user.save();
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        message:
+          'Password changed successfully',
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Change Password Error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Something went wrong',
+
+        error:
+          error.message,
+
+      });
+    }
+  },
+
+
+  // ============================================================
+  // LOGOUT
+  // ============================================================
+
+  logout: async (req, res) => {
+
+    try {
+
+      /*
+       * JWT is stateless.
+       *
+       * For the current implementation,
+       * logout is handled by the client removing
+       * the stored token.
+       *
+       * If you later want server-side token
+       * invalidation, we can add a token blacklist.
+       */
+
+      return res.status(200).json({
+
+        success: true,
+
+        message:
+          'Logged out successfully',
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Logout Error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Something went wrong',
+
+        error:
+          error.message,
+
+      });
+    }
+  },
 
 };
