@@ -1,22 +1,25 @@
-var createError = require('http-errors');
+const createError = require('http-errors');
 require('dotenv').config();
-var mongoose = require('mongoose');
-var express = require('express');
-var path = require('path');
-var cookieParser = require('cookie-parser');
-var logger = require('morgan');
-var indexRouter = require('./routes/index');
-var usersRouter = require('./routes/users');
-var { connectDB } = require('./utils/db');
-var app = express();
-var debug = require('debug')('providerbackend:server');
-var http = require('http');
+const mongoose = require('mongoose');
+const express = require('express');
+const path = require('path');
+const cookieParser = require('cookie-parser');
+const logger = require('morgan');
+const fileUpload = require("express-fileupload");
+const authRouter = require('./routes/auth');
+const indexRouter = require('./routes/index');
+const usersRouter = require('./routes/users');
+const { connectDB } = require('./utils/db');
+
+const app = express();
+const debug = require('debug')('providerbackend:server');
+const http = require('http');
 
 /**
  * Get port from environment and store in Express.
  */
-var port = normalizePort(process.env.PORT || '3000');
-var server = http.createServer(app);
+const port = normalizePort(process.env.PORT || '3000');
+const server = http.createServer(app);
 app.set('port', port);
 
 if (mongoose.connection.readyState === 0) {
@@ -34,9 +37,32 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
+// JSON body
+app.use(express.json());
+
+// URL-encoded body
+app.use(express.urlencoded({ extended: true }));
+
+// Multipart/form-data + files
+app.use(
+  fileUpload({
+    createParentPath: true,
+
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10 MB
+    },
+
+    abortOnLimit: true,
+
+    // Keeps uploaded files in memory.
+    // Your utility function will move them to disk.
+    useTempFiles: false,
+  })
+);
 
 app.use('/', indexRouter);
 app.use('/users', usersRouter);
+app.use('/api/auth', authRouter);
 
 // catch 404 and forward to error handler
 app.use(function (req, res, next) {
@@ -57,7 +83,7 @@ server.on('listening', onListening);
 console.log(`Server is running on port ${port}`);
 
 function normalizePort(val) {
-  var port = parseInt(val, 10);
+  const port = parseInt(val, 10);
   if (isNaN(port)) {
     return val;
   }
@@ -71,7 +97,7 @@ function onError(error) {
   if (error.syscall !== 'listen') {
     throw error;
   }
-  var bind = typeof port === 'string' ? 'Pipe ' + port : 'Port ' + port;
+  const bind = typeof port === 'string' ? 'Pipe ' + port : 'Port ' + port;
   switch (error.code) {
     case 'EACCES':
       console.error(bind + ' requires elevated privileges');
@@ -87,8 +113,8 @@ function onError(error) {
 }
 
 function onListening() {
-  var addr = server.address();
-  var bind = typeof addr === 'string' ? 'pipe ' + addr : 'port ' + addr.port;
+  const addr = server.address();
+  const bind = typeof addr === 'string' ? 'pipe ' + addr : 'port ' + addr.port;
   debug('Listening on ' + bind);
 }
 
