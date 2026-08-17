@@ -9,6 +9,7 @@ router.use(ensureDB);
 
 // Public routes
 router.post('/register', authController.register);
+router.post('/update-profile', authenticateToken, authController.updateProfile);
 router.post('/verify-otp', authController.verifyOtp);
 router.post('/resend-otp', authController.resendOtp);
 router.post('/login', authController.login);

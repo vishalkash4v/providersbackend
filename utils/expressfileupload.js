@@ -3,18 +3,23 @@ const fs = require("fs");
 const crypto = require("crypto");
 
 /**
+ * Convert filesystem path to public/relative path
+ *
+ * Windows:
+ * W:\providerbackend\uploads\services\file.png
+ *
+ * Becomes:
+ * uploads/services/file.png
+ */
+function getPublicPath(uploadDir, fileName) {
+  return path
+    .join(uploadDir, fileName)
+    .split(path.sep)
+    .join("/");
+}
+
+/**
  * Get uploaded files from req.files
- *
- * Supports:
- * - Single file
- * - Multiple files
- * - One field containing multiple files
- * - Multiple different file fields
- *
- * Example:
- * req.files.file
- * req.files.files
- * req.files.image
  */
 function getUploadedFiles(req) {
   if (!req.files) {
@@ -45,19 +50,7 @@ function getUploadedFiles(req) {
 }
 
 /**
- * Save uploaded files to a directory
- *
- * Returns:
- * [
- *   {
- *     fieldName,
- *     originalName,
- *     fileName,
- *     path,
- *     size,
- *     mimetype
- *   }
- * ]
+ * Save uploaded files
  */
 async function uploadFiles(req, uploadDir = "uploads") {
   const uploadedFiles = getUploadedFiles(req);
@@ -78,7 +71,6 @@ async function uploadFiles(req, uploadDir = "uploads") {
     const file = item.file;
 
     const originalName = file.name;
-
     const extension = path.extname(originalName);
 
     const fileName =
@@ -86,6 +78,7 @@ async function uploadFiles(req, uploadDir = "uploads") {
       `${crypto.randomBytes(8).toString("hex")}` +
       extension;
 
+    // Actual filesystem path
     const filePath = path.join(
       absoluteUploadDir,
       fileName
@@ -93,11 +86,17 @@ async function uploadFiles(req, uploadDir = "uploads") {
 
     await file.mv(filePath);
 
+    // Relative/public path
+    const publicPath = getPublicPath(
+      uploadDir,
+      fileName
+    );
+
     results.push({
       fieldName: item.fieldName,
       originalName,
       fileName,
-      path: filePath,
+      path: publicPath,
       size: file.size,
       mimetype: file.mimetype,
     });
@@ -108,9 +107,6 @@ async function uploadFiles(req, uploadDir = "uploads") {
 
 /**
  * Upload only one file from a specific field
- *
- * Example:
- * uploadSingleFile(req, "profile")
  */
 async function uploadSingleFile(
   req,
@@ -123,8 +119,6 @@ async function uploadSingleFile(
 
   let file = req.files[fieldName];
 
-  // If frontend accidentally sends multiple files,
-  // take the first one.
   if (Array.isArray(file)) {
     file = file[0];
   }
@@ -142,6 +136,7 @@ async function uploadSingleFile(
     `${crypto.randomBytes(8).toString("hex")}` +
     extension;
 
+  // Actual filesystem path
   const filePath = path.join(
     absoluteUploadDir,
     fileName
@@ -149,11 +144,17 @@ async function uploadSingleFile(
 
   await file.mv(filePath);
 
+  // Relative/public path
+  const publicPath = getPublicPath(
+    uploadDir,
+    fileName
+  );
+
   return {
     fieldName,
     originalName: file.name,
     fileName,
-    path: filePath,
+    path: publicPath,
     size: file.size,
     mimetype: file.mimetype,
   };

@@ -9,6 +9,8 @@ const http = require('http');
 
 const indexRouter = require('./routes/index');
 const usersRouter = require('./routes/users');
+const servicesRouter = require('./routes/services');
+const providersRouter = require('./routes/providers');
 const authRouter = require('./routes/auth');
 const { connectDB } = require('./utils/db');
 
@@ -56,7 +58,14 @@ app.use('/', indexRouter);
 app.use('/users', usersRouter);
 app.use('/api/auth', authRouter);
 
+
+// ...
+
+app.use('/api/auth', servicesRouter);
+app.use('/api/auth', providersRouter);
+app.use('/api/auth', usersRouter);
 // Catch 404 and forward to error handler
+app.use("/uploads", express.static(path.resolve("uploads")));
 app.use(function (req, res, next) {
   next(createError(404));
 });
