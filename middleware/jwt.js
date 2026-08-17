@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const TokenBlacklist = require('../models/TokenBlacklist');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -6,50 +7,55 @@ if (!JWT_SECRET) {
   throw new Error('JWT_SECRET is required in .env');
 }
 
-// Generate JWT Token
 function generateToken(user) {
   return jwt.sign(
     {
       id: user._id || user.id,
       email: user.email,
-      role: user.role, // 0 = Customer, 1 = Provider, 2 = Admin
+      role: user.role,
     },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
 }
 
-// Authenticate Token Middleware
-function authenticateToken(req, res, next) {
+async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
     return res.status(401).json({
       success: false,
-      message: 'Access token required'
+      message: 'Access token required',
     });
   }
 
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
-    if (err) {
-      return res.status(403).json({
+  try {
+    // Check if token is blacklisted
+    const blacklisted = await TokenBlacklist.findOne({ token });
+    if (blacklisted) {
+      return res.status(401).json({
         success: false,
-        message: 'Invalid or expired token'
+        message: 'Token is invalid or expired',
       });
     }
 
-    req.user = decoded; // { id, email, role }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
     next();
-  });
+  } catch (err) {
+    return res.status(403).json({
+      success: false,
+      message: 'Invalid or expired token',
+    });
+  }
 }
 
-// Optional: Only for Admin
 function isAdmin(req, res, next) {
   if (req.user.role !== 2) {
     return res.status(403).json({
       success: false,
-      message: 'Admin access only'
+      message: 'Admin access only',
     });
   }
   next();
@@ -58,5 +64,5 @@ function isAdmin(req, res, next) {
 module.exports = {
   generateToken,
   authenticateToken,
-  isAdmin
+  isAdmin,
 };

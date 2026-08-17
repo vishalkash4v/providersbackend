@@ -15,7 +15,8 @@ const {
   generateReferralCode,
 } = require('../utils/referral');
 
-
+const jwt = require('jsonwebtoken');
+const TokenBlacklist = require('../models/TokenBlacklist');
 module.exports = {
 
   // ============================================================
@@ -1477,51 +1478,32 @@ module.exports = {
   // LOGOUT
   // ============================================================
 
-  logout: async (req, res) => {
+ logout: async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
 
-    try {
+    if (token) {
+      // Decode token to get expiry
+      const decoded = jwt.decode(token);
 
-      /*
-       * JWT is stateless.
-       *
-       * For the current implementation,
-       * logout is handled by the client removing
-       * the stored token.
-       *
-       * If you later want server-side token
-       * invalidation, we can add a token blacklist.
-       */
-
-      return res.status(200).json({
-
-        success: true,
-
-        message:
-          'Logged out successfully',
-
-      });
-
-
-    } catch (error) {
-
-      console.error(
-        'Logout Error:',
-        error
-      );
-
-
-      return res.status(500).json({
-
-        success: false,
-
-        message:
-          'Something went wrong',
-
-        error:
-          error.message,
-
+      await TokenBlacklist.create({
+        token,
+        expiresAt: new Date(decoded.exp * 1000), // token expiry time
       });
     }
-  },
+
+    res.status(200).json({
+      success: true,
+      message: 'Logged out successfully',
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
 
 };
