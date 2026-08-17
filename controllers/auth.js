@@ -1136,7 +1136,7 @@ module.exports = {
         'email',
         'otp',
         'newPassword',
-        'confirmPassword',
+      
       ];
 
 
@@ -1155,21 +1155,11 @@ module.exports = {
         email,
         otp,
         newPassword,
-        confirmPassword,
+   
       } = req.body;
 
 
-      if (
-        newPassword !==
-        confirmPassword
-      ) {
-
-        return res.status(400).json({
-          success: false,
-          message:
-            'Passwords do not match',
-        });
-      }
+    
 
 
       const user =
@@ -1378,7 +1368,7 @@ module.exports = {
       const required = [
         'oldPassword',
         'newPassword',
-        'confirmPassword',
+        
       ];
 
 
@@ -1396,7 +1386,7 @@ module.exports = {
       const {
         oldPassword,
         newPassword,
-        confirmPassword,
+  
       } = req.body;
 
 
@@ -1404,17 +1394,7 @@ module.exports = {
         req.user.id;
 
 
-      if (
-        newPassword !==
-        confirmPassword
-      ) {
-
-        return res.status(400).json({
-          success: false,
-          message:
-            'New password and confirm password do not match',
-        });
-      }
+      
 
 
       const user =
