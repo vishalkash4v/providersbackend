@@ -45,16 +45,7 @@ const validate = (req, res, required = []) => {
   }
 
   // Password strength
-  if (required.includes('password') && data.password) {
-    const strong = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
-    if (!strong.test(data.password)) {
-      res.status(400).json({
-        success: false,
-        message: 'Password must be strong (8+ characters, uppercase, lowercase, number & special character)',
-      });
-      return true;
-    }
-  }
+
 
   // Confirm Password
   if (required.includes('confirmPassword') && data.password !== data.confirmPassword) {
