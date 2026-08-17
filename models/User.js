@@ -185,6 +185,17 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    otpType: {
+      type: Number,
+      enum: [0, 1],
+      default: null,
+    },
+
+    otpVerified: {
+      type: Boolean,
+      default: false,
+    },
+
     otp: {
       type: String,
     },
