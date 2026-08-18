@@ -6,6 +6,6 @@ const ensureDB = require('../middleware/db');
 router.use(ensureDB);
 
 // Public - Homepage nearby providers
-router.get('/nearby-providers', usersController.getNearbyProviders);
+router.get('/home', usersController.home);
 
 module.exports = router;

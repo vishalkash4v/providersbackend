@@ -7,7 +7,7 @@ const {
 } = require('../middleware/jwt');
 
 const sendEmail = require('../utils/sendEmail');
-
+const ProviderProfile = require('../models/ProviderProfile');
 const {
   validate,
 } = require('../utils/fieldValidations');
@@ -15,7 +15,9 @@ const {
 const {
   generateReferralCode,
 } = require('../utils/referral');
-
+const {
+  saveUserDevice,
+} = require('../utils/device');
 const jwt = require('jsonwebtoken');
 const TokenBlacklist = require('../models/TokenBlacklist');
 
@@ -27,6 +29,10 @@ module.exports = {
 
   register: async (req, res) => {
     try {
+      // ============================================================
+      // REQUIRED FIELDS
+      // ============================================================
+
       const required = [
         'firstName',
         'lastName',
@@ -38,6 +44,10 @@ module.exports = {
       ];
 
       if (validate(req, res, required)) return;
+
+      // ============================================================
+      // REQUEST DATA
+      // ============================================================
 
       const {
         firstName,
@@ -51,38 +61,92 @@ module.exports = {
         longitude,
         locationName,
         referralCode: enteredReferralCode,
+
+        // ==========================================================
+        // OPTIONAL DEVICE FIELDS
+        // ==========================================================
+
+        deviceToken,
+
+        // 0 = Android
+        // 1 = iOS
+        // Default = Android
+        deviceType = 0,
       } = req.body;
 
-      // ====================== PASSWORD MATCH ======================
+      // ============================================================
+      // PASSWORD MATCH
+      // ============================================================
+
       if (password !== confirmPassword) {
         return res.status(400).json({
           success: false,
-          message: 'Password and confirm password do not match',
+          message:
+            'Password and confirm password do not match',
         });
       }
 
-      const normalizedEmail = email.trim().toLowerCase();
-      const normalizedMobile = mobile.trim();
+      // ============================================================
+      // NORMALIZE EMAIL / MOBILE
+      // ============================================================
 
-      // ====================== FIND EXISTING USERS ======================
-      const existingEmailUser = await User.findOne({
-        email: normalizedEmail,
-      });
+      const normalizedEmail =
+        email.trim().toLowerCase();
 
-      const existingMobileUser = await User.findOne({
-        mobile: normalizedMobile,
-      });
+      const normalizedMobile =
+        mobile.trim();
 
-      // ====================== VERIFIED EMAIL ======================
-      if (existingEmailUser && existingEmailUser.isVerified) {
+      // ============================================================
+      // DEVICE TYPE VALIDATION
+      // ============================================================
+
+      const normalizedDeviceType =
+        Number(deviceType);
+
+      if (![0, 1].includes(normalizedDeviceType)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Invalid device type. Use 0 for Android or 1 for iOS',
+        });
+      }
+
+      // ============================================================
+      // FIND EXISTING USERS
+      // ============================================================
+
+      const existingEmailUser =
+        await User.findOne({
+          email: normalizedEmail,
+        });
+
+      const existingMobileUser =
+        await User.findOne({
+          mobile: normalizedMobile,
+        });
+
+      // ============================================================
+      // VERIFIED EMAIL
+      // ============================================================
+
+      if (
+        existingEmailUser &&
+        existingEmailUser.isVerified
+      ) {
         return res.status(400).json({
           success: false,
           message: 'Email already registered',
         });
       }
 
-      // ====================== VERIFIED MOBILE ======================
-      if (existingMobileUser && existingMobileUser.isVerified) {
+      // ============================================================
+      // VERIFIED MOBILE
+      // ============================================================
+
+      if (
+        existingMobileUser &&
+        existingMobileUser.isVerified
+      ) {
         return res.status(400).json({
           success: false,
           message: 'Mobile number already registered',
@@ -90,13 +154,14 @@ module.exports = {
       }
 
       // ============================================================
-      // EMAIL AND MOBILE BELONG TO DIFFERENT UNVERIFIED USERS
+      // EMAIL AND MOBILE BELONG TO DIFFERENT USERS
       // ============================================================
+
       if (
         existingEmailUser &&
         existingMobileUser &&
         existingEmailUser._id.toString() !==
-          existingMobileUser._id.toString()
+        existingMobileUser._id.toString()
       ) {
         return res.status(400).json({
           success: false,
@@ -108,23 +173,33 @@ module.exports = {
       // ============================================================
       // EXISTING UNVERIFIED USER
       // ============================================================
-      const existingUser =
-        existingEmailUser || existingMobileUser;
 
-      // ====================== REFERRAL ======================
-      let referredBy = existingUser?.referredBy || null;
+      const existingUser =
+        existingEmailUser ||
+        existingMobileUser;
+
+      // ============================================================
+      // REFERRAL
+      // ============================================================
+
+      let referredBy =
+        existingUser?.referredBy || null;
 
       if (
         enteredReferralCode &&
         enteredReferralCode.trim() !== ''
       ) {
         const normalizedReferralCode =
-          enteredReferralCode.trim().toUpperCase();
+          enteredReferralCode
+            .trim()
+            .toUpperCase();
 
-        const referringUser = await User.findOne({
-          referralCode: normalizedReferralCode,
-          isActive: true,
-        });
+        const referringUser =
+          await User.findOne({
+            referralCode:
+              normalizedReferralCode,
+            isActive: true,
+          });
 
         if (!referringUser) {
           return res.status(400).json({
@@ -137,19 +212,25 @@ module.exports = {
         if (
           existingUser &&
           referringUser._id.toString() ===
-            existingUser._id.toString()
+          existingUser._id.toString()
         ) {
           return res.status(400).json({
             success: false,
-            message: 'You cannot use your own referral code',
+            message:
+              'You cannot use your own referral code',
           });
         }
 
-        referredBy = referringUser._id;
+        referredBy =
+          referringUser._id;
       }
 
-      // ====================== LOCATION ======================
-      let location = existingUser?.location || null;
+      // ============================================================
+      // LOCATION
+      // ============================================================
+
+      let location =
+        existingUser?.location || null;
 
       const hasLatitude =
         latitude !== undefined &&
@@ -170,7 +251,10 @@ module.exports = {
         hasLongitude ||
         hasLocationName
       ) {
-        if (!hasLatitude || !hasLongitude) {
+        if (
+          !hasLatitude ||
+          !hasLongitude
+        ) {
           return res.status(400).json({
             success: false,
             message:
@@ -178,8 +262,11 @@ module.exports = {
           });
         }
 
-        const lat = Number(latitude);
-        const lng = Number(longitude);
+        const lat =
+          Number(latitude);
+
+        const lng =
+          Number(longitude);
 
         if (
           !Number.isFinite(lat) ||
@@ -192,7 +279,10 @@ module.exports = {
           });
         }
 
-        if (lat < -90 || lat > 90) {
+        if (
+          lat < -90 ||
+          lat > 90
+        ) {
           return res.status(400).json({
             success: false,
             message:
@@ -200,7 +290,10 @@ module.exports = {
           });
         }
 
-        if (lng < -180 || lng > 180) {
+        if (
+          lng < -180 ||
+          lng > 180
+        ) {
           return res.status(400).json({
             success: false,
             message:
@@ -210,17 +303,25 @@ module.exports = {
 
         location = {
           type: 'Point',
-          coordinates: [lng, lat],
+          coordinates: [
+            lng,
+            lat,
+          ],
         };
 
         if (hasLocationName) {
-          location.name = locationName.trim();
+          location.name =
+            locationName.trim();
         }
       }
 
-      // ====================== PROFILE IMAGE ======================
+      // ============================================================
+      // PROFILE IMAGE
+      // ============================================================
+
       let profileImage =
-        existingUser?.profileImage || null;
+        existingUser?.profileImage ||
+        null;
 
       if (
         req.files &&
@@ -234,29 +335,42 @@ module.exports = {
           );
 
         if (uploaded) {
-          profileImage = uploaded.path;
+          profileImage =
+            uploaded.path;
         }
       }
 
-      // ====================== PASSWORD ======================
-      const hashedPassword =
-        await bcrypt.hash(password, 12);
+      // ============================================================
+      // PASSWORD
+      // ============================================================
 
-      // ====================== OTP ======================
+      const hashedPassword =
+        await bcrypt.hash(
+          password,
+          12
+        );
+
+      // ============================================================
+      // OTP
+      // ============================================================
+
       const otp =
         Math.floor(
-          1000 + Math.random() * 9000
+          1000 +
+          Math.random() *
+          9000
         ).toString();
 
       const otpExpires =
         new Date(
           Date.now() +
-            10 * 60 * 1000
+          10 * 60 * 1000
         );
 
       // ============================================================
-      // UPDATE EXISTING UNVERIFIED USER
+      // EXISTING UNVERIFIED USER
       // ============================================================
+
       if (existingUser) {
         existingUser.firstName =
           firstName.trim();
@@ -305,34 +419,63 @@ module.exports = {
 
         await existingUser.save();
 
-        // ====================== SEND OTP ======================
-        await sendEmail({
-          email: existingUser.email,
-          subject:
-            'OTP Verification - Provider App',
-          html: `
-            <h2>Hello ${existingUser.firstName},</h2>
+        // ==========================================================
+        // SAVE / UPDATE DEVICE
+        // ==========================================================
 
-            <p>Your new OTP for verification is:</p>
-
-            <h1 style="letter-spacing: 5px;">
-              ${otp}
-            </h1>
-
-            <p>
-              This OTP is valid for 10 minutes.
-            </p>
-          `,
+        await saveUserDevice({
+          userId:
+            existingUser._id,
+          deviceToken,
+          deviceType:
+            normalizedDeviceType,
         });
 
+        // ==========================================================
+        // SEND OTP
+        // ==========================================================
+
+        await sendEmail({
+          email:
+            existingUser.email,
+
+          subject:
+            'OTP Verification - Provider App',
+
+          html: `
+          <h2>Hello ${existingUser.firstName},</h2>
+
+          <p>Your new OTP for verification is:</p>
+
+          <h1 style="letter-spacing: 5px;">
+            ${otp}
+          </h1>
+
+          <p>
+            This OTP is valid for 10 minutes.
+          </p>
+        `,
+        });
+
+        // ==========================================================
+        // TOKEN
+        // ==========================================================
+
         const token =
-          generateToken(existingUser);
+          generateToken(
+            existingUser
+          );
+
+        // ==========================================================
+        // RESPONSE
+        // ==========================================================
 
         return res.status(200).json({
           success: true,
           message:
             'Registration details updated. New OTP sent to your email.',
           token,
+
           data: {
             userId:
               existingUser._id,
@@ -362,7 +505,8 @@ module.exports = {
               existingUser.profileImage,
 
             location:
-              existingUser.location || null,
+              existingUser.location ||
+              null,
 
             isVerified:
               existingUser.isVerified,
@@ -374,7 +518,10 @@ module.exports = {
       // NEW USER
       // ============================================================
 
-      // ====================== GENERATE UNIQUE REFERRAL CODE ======================
+      // ============================================================
+      // GENERATE UNIQUE REFERRAL CODE
+      // ============================================================
+
       let userReferralCode;
 
       while (true) {
@@ -390,7 +537,10 @@ module.exports = {
         if (!exists) break;
       }
 
-      // ====================== CREATE USER ======================
+      // ============================================================
+      // CREATE USER DATA
+      // ============================================================
+
       const userData = {
         firstName:
           firstName.trim(),
@@ -434,12 +584,33 @@ module.exports = {
           location;
       }
 
+      // ============================================================
+      // CREATE USER
+      // ============================================================
+
       const user =
         await User.create(
           userData
         );
 
-      // ====================== SEND OTP ======================
+      // ============================================================
+      // SAVE / UPDATE DEVICE
+      // ============================================================
+
+      await saveUserDevice({
+        userId:
+          user._id,
+
+        deviceToken,
+
+        deviceType:
+          normalizedDeviceType,
+      });
+
+      // ============================================================
+      // SEND OTP
+      // ============================================================
+
       await sendEmail({
         email:
           user.email,
@@ -448,30 +619,37 @@ module.exports = {
           'OTP Verification - Provider App',
 
         html: `
-          <h2>Hello ${user.firstName},</h2>
+        <h2>Hello ${user.firstName},</h2>
 
-          <p>Your OTP for verification is:</p>
+        <p>Your OTP for verification is:</p>
 
-          <h1 style="letter-spacing: 5px;">
-            ${otp}
-          </h1>
+        <h1 style="letter-spacing: 5px;">
+          ${otp}
+        </h1>
 
-          <p>
-            This OTP is valid for 10 minutes.
-          </p>
-        `,
+        <p>
+          This OTP is valid for 10 minutes.
+        </p>
+      `,
       });
 
-      // ====================== TOKEN ======================
+      // ============================================================
+      // TOKEN
+      // ============================================================
+
       const token =
         generateToken(user);
 
-      // ====================== RESPONSE ======================
+      // ============================================================
+      // RESPONSE
+      // ============================================================
+
       return res.status(201).json({
         success: true,
         message:
           'Registration successful. OTP sent to your email.',
         token,
+
         data: {
           userId:
             user._id,
@@ -501,19 +679,24 @@ module.exports = {
             user.profileImage,
 
           location:
-            user.location || null,
+            user.location ||
+            null,
 
           isVerified:
             user.isVerified,
         },
       });
+
     } catch (error) {
       console.error(
         'Register Error:',
         error
       );
 
-      // ====================== DUPLICATE KEY ======================
+      // ============================================================
+      // DUPLICATE KEY
+      // ============================================================
+
       if (error.code === 11000) {
         return res.status(400).json({
           success: false,
@@ -521,6 +704,239 @@ module.exports = {
             'Email or Mobile number already registered',
         });
       }
+
+      // ============================================================
+      // ERROR
+      // ============================================================
+
+      return res.status(500).json({
+        success: false,
+        message:
+          'Something went wrong',
+        error:
+          error.message,
+      });
+    }
+  },
+
+  // ============================================================
+  // ============================================================
+  // LOGIN
+  // ============================================================
+
+  login: async (req, res) => {
+    try {
+      // ============================================================
+      // REQUIRED FIELDS
+      // ============================================================
+
+      const required = [
+        'email',
+        'password',
+      ];
+
+      if (validate(req, res, required)) {
+        return;
+      }
+
+      // ============================================================
+      // REQUEST DATA
+      // ============================================================
+
+      const {
+        email,
+        password,
+
+        // Optional device fields
+        deviceToken,
+
+        // 0 = Android
+        // 1 = iOS
+        // Default = Android
+        deviceType = 0,
+      } = req.body;
+
+      // ============================================================
+      // DEVICE TYPE VALIDATION
+      // ============================================================
+
+      const normalizedDeviceType =
+        Number(deviceType);
+
+      if (![0, 1].includes(normalizedDeviceType)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Invalid device type. Use 0 for Android or 1 for iOS',
+        });
+      }
+
+      // ============================================================
+      // FIND USER
+      // ============================================================
+
+      const user =
+        await User.findOne({
+          email:
+            email
+              .trim()
+              .toLowerCase(),
+        });
+
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          message:
+            'Invalid email or password',
+        });
+      }
+
+      // ============================================================
+      // VERIFY ACCOUNT
+      // ============================================================
+
+      if (!user.isVerified) {
+        return res.status(401).json({
+          success: false,
+          message:
+            'Please verify your account first',
+        });
+      }
+
+      // ============================================================
+      // ACTIVE ACCOUNT CHECK
+      // ============================================================
+
+      if (!user.isActive) {
+        return res.status(401).json({
+          success: false,
+          message:
+            'Your account has been deactivated',
+        });
+      }
+
+      // ============================================================
+      // PASSWORD CHECK
+      // ============================================================
+
+      const isMatch =
+        await bcrypt.compare(
+          password,
+          user.password
+        );
+
+      if (!isMatch) {
+        return res.status(401).json({
+          success: false,
+          message:
+            'Invalid email or password',
+        });
+      }
+
+      // ============================================================
+      // PROVIDER WORK DETAILS CHECK
+      //
+      // role:
+      // 0 = Customer
+      // 1 = Provider
+      //
+      // hasWorkDetails:
+      // true  = Provider has at least one service
+      // false = No services added
+      // ============================================================
+
+      let hasWorkDetails = false;
+
+      if (Number(user.role) === 1) {
+        const providerProfile =
+          await ProviderProfile.findOne({
+            user: user._id,
+          })
+            .select('_id services')
+            .lean();
+
+        hasWorkDetails =
+          !!providerProfile &&
+          Array.isArray(providerProfile.services) &&
+          providerProfile.services.length > 0;
+      }
+
+      // ============================================================
+      // SAVE / UPDATE DEVICE
+      // ============================================================
+
+      await saveUserDevice({
+        userId: user._id,
+        deviceToken,
+        deviceType:
+          normalizedDeviceType,
+      });
+
+      // ============================================================
+      // GENERATE TOKEN
+      // ============================================================
+
+      const token =
+        generateToken(user);
+
+      // ============================================================
+      // RESPONSE
+      // ============================================================
+
+      return res.status(200).json({
+        success: true,
+        message:
+          'Login successful',
+
+        token,
+
+        data: {
+          id:
+            user._id,
+
+          firstName:
+            user.firstName,
+
+          lastName:
+            user.lastName,
+
+          email:
+            user.email,
+
+          mobile:
+            user.mobile,
+
+          role:
+            user.role,
+
+          referralCode:
+            user.referralCode,
+
+          referredBy:
+            user.referredBy,
+
+          location:
+            user.location ||
+            null,
+
+          profileImage:
+            user.profileImage,
+
+          isVerified:
+            user.isVerified,
+
+          isActive:
+            user.isActive,
+
+          hasWorkDetails,
+        },
+      });
+
+    } catch (error) {
+      console.error(
+        'Login Error:',
+        error
+      );
 
       return res.status(500).json({
         success: false,
@@ -964,7 +1380,7 @@ module.exports = {
         user.otpType === undefined ||
         user.otpType === null ||
         Number(user.otpType) !==
-          otpType
+        otpType
       ) {
         return res.status(400).json({
           success: false,
@@ -989,7 +1405,7 @@ module.exports = {
       if (
         !user.otpExpires ||
         user.otpExpires <
-          new Date()
+        new Date()
       ) {
         return res.status(400).json({
           success: false,
@@ -1165,14 +1581,14 @@ module.exports = {
       const otp =
         Math.floor(
           1000 +
-            Math.random() *
-              9000
+          Math.random() *
+          9000
         ).toString();
 
       const otpExpires =
         new Date(
           Date.now() +
-            10 * 60 * 1000
+          10 * 60 * 1000
         );
 
       // Registration OTP
@@ -1235,140 +1651,7 @@ module.exports = {
   },
 
 
-  // ============================================================
-  // LOGIN
-  // ============================================================
 
-  login: async (req, res) => {
-    try {
-      const required = [
-        'email',
-        'password',
-      ];
-
-      if (
-        validate(
-          req,
-          res,
-          required
-        )
-      ) {
-        return;
-      }
-
-      const {
-        email,
-        password,
-      } = req.body;
-
-      const user =
-        await User.findOne({
-          email:
-            email
-              .trim()
-              .toLowerCase(),
-        });
-
-      if (!user) {
-        return res.status(401).json({
-          success: false,
-          message:
-            'Invalid email or password',
-        });
-      }
-
-      if (!user.isVerified) {
-        return res.status(401).json({
-          success: false,
-          message:
-            'Please verify your account first',
-        });
-      }
-
-      if (!user.isActive) {
-        return res.status(401).json({
-          success: false,
-          message:
-            'Your account has been deactivated',
-        });
-      }
-
-      const isMatch =
-        await bcrypt.compare(
-          password,
-          user.password
-        );
-
-      if (!isMatch) {
-        return res.status(401).json({
-          success: false,
-          message:
-            'Invalid email or password',
-        });
-      }
-
-      const token =
-        generateToken(user);
-
-      return res.status(200).json({
-        success: true,
-        message:
-          'Login successful',
-        token,
-        data: {
-          id:
-            user._id,
-
-          firstName:
-            user.firstName,
-
-          lastName:
-            user.lastName,
-
-          email:
-            user.email,
-
-          mobile:
-            user.mobile,
-
-          role:
-            user.role,
-
-          referralCode:
-            user.referralCode,
-
-          referredBy:
-            user.referredBy,
-
-          location:
-            user.location || null,
-
-          profileImage:
-            user.profileImage,
-
-          isVerified:
-            user.isVerified,
-
-          isActive:
-            user.isActive,
-        },
-      });
-
-    } catch (error) {
-      console.error(
-        'Login Error:',
-        error
-      );
-
-      return res.status(500).json({
-        success: false,
-        message:
-          'Something went wrong',
-        error:
-          error.message,
-      });
-    }
-  },
 
 
   // ============================================================
@@ -1427,14 +1710,14 @@ module.exports = {
       const otp =
         Math.floor(
           1000 +
-            Math.random() *
-              9000
+          Math.random() *
+          9000
         ).toString();
 
       const otpExpires =
         new Date(
           Date.now() +
-            10 * 60 * 1000
+          10 * 60 * 1000
         );
 
       // Forgot password OTP

@@ -12,6 +12,7 @@ const usersRouter = require('./routes/users');
 const servicesRouter = require('./routes/services');
 const providersRouter = require('./routes/providers');
 const authRouter = require('./routes/auth');
+const bookingRouter = require('./routes/booking');
 const { connectDB } = require('./utils/db');
 
 const app = express();
@@ -61,9 +62,10 @@ app.use('/api/auth', authRouter);
 
 // ...
 
-app.use('/api/auth', servicesRouter);
-app.use('/api/auth', providersRouter);
-app.use('/api/auth', usersRouter);
+app.use('/api/services', servicesRouter);
+app.use('/api/provider', providersRouter);
+app.use('/api/customer', usersRouter);
+app.use('/api/booking', bookingRouter);
 // Catch 404 and forward to error handler
 app.use("/uploads", express.static(path.resolve("uploads")));
 app.use(function (req, res, next) {
