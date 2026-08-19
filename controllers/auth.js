@@ -1,7 +1,6 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
-const { uploadSingleFile } = require('../utils/expressfileupload');
-
+const { uploadSingleFile } = require('../utils/r2uploads');
 const {
   generateToken,
 } = require('../middleware/jwt');
