@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Booking Payment</title>
+
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+</head>
+
+<body>
+
+  <h1>Booking Payment</h1>
+
+  <p>Booking ID: <%= bookingId %></p>
+
+  <p>Offer ID: <%= offerId %></p>
+
+  <p>Distance: <%= distanceKm %> KM</p>
+
+  <p>Provider: <%= providerName %></p>
+
+  <h2>₹<%= amount.toFixed(2) %></h2>
+
+  <button id="payButton" onclick="startPayment()">
+    Pay ₹<%= amount.toFixed(2) %>
+  </button>
+
+  <div id="message"></div>
+
+
+  <script>
+    const paymentData = {
+      key: <%- JSON.stringify(razorpayKeyId) %>,
+      orderId: <%- JSON.stringify(razorpayOrderId) %>,
+      amount: <%= amountInPaise %>,
+      currency: <%- JSON.stringify(currency) %>,
+      offerId: <%- JSON.stringify(offerId) %>,
+      providerName: <%- JSON.stringify(providerName || '') %>,
+      providerEmail: <%- JSON.stringify(providerEmail || '') %>,
+      providerMobile: <%- JSON.stringify(providerMobile || '') %>
+    };
+
+    console.log('PAYMENT DATA:', paymentData);
+
+
+    function startPayment() {
+
+      const options = {
+        key: paymentData.key,
+
+        amount: paymentData.amount,
+
+        currency: paymentData.currency,
+
+        name: 'Provider App',
+
+        description: 'Booking access fee',
+
+        order_id: paymentData.orderId,
+
+        prefill: {
+          name: paymentData.providerName,
+          email: paymentData.providerEmail,
+          contact: paymentData.providerMobile
+        },
+
+        handler: async function (response) {
+
+          console.log(
+            'RAZORPAY RESPONSE:',
+            response
+          );
+
+          document.getElementById('message').innerText =
+            'Payment successful. Payment ID: ' +
+            response.razorpay_payment_id;
+        },
+
+        modal: {
+          ondismiss: function () {
+            document.getElementById('message').innerText =
+              'Payment cancelled';
+          }
+        }
+      };
+
+      const rzp =
+        new Razorpay(options);
+
+      rzp.open();
+    }
+  </script>
+
+</body>
+</html>

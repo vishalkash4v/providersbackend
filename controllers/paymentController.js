@@ -17,12 +17,58 @@ const {
 } = require('../utils/bookingCredits');
 
 
+// ============================================================
+// CALCULATE BOOKING ACCESS FEE
+// ============================================================
+
+const getBookingAccessFee = ({
+    distanceKm,
+}) => {
+    const distance =
+        Number(distanceKm);
+
+    if (
+        !Number.isFinite(distance) ||
+        distance < 0
+    ) {
+        throw new Error(
+            'Invalid booking distance'
+        );
+    }
+
+    const baseFee =
+        Number(
+            process.env.BOOKING_FEE_BASE || 20
+        );
+
+    const perKmFee =
+        Number(
+            process.env.BOOKING_FEE_PER_KM || 5
+        );
+
+    const amount =
+        Number(
+            (
+                baseFee +
+                distance * perKmFee
+            ).toFixed(2)
+        );
+
+    if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+    ) {
+        throw new Error(
+            'Invalid booking access fee'
+        );
+    }
+
+    return amount;
+};
+
 
 // ============================================================
 // EJS PAYMENT CHECKOUT PAGE
-// ============================================================
-// GET
-// /api/payment/booking/checkout/:offerId
 // ============================================================
 
 const renderBookingCheckout =
@@ -50,20 +96,26 @@ const renderBookingCheckout =
             }
 
             if (
-                offer.provider.toString() !==
-                req.user.id.toString()
-            ) {
-                return res.status(403).send(
-                    'You are not authorized for this offer'
-                );
-            }
-
-            if (
                 offer.status !==
                 'USER_ACCEPTED'
             ) {
                 return res.status(400).send(
                     'This offer is not waiting for provider approval'
+                );
+            }
+
+            if (
+                offer.providerApprovalExpiresAt &&
+                offer.providerApprovalExpiresAt <
+                    new Date()
+            ) {
+                offer.status =
+                    'EXPIRED';
+
+                await offer.save();
+
+                return res.status(400).send(
+                    'Provider approval window has expired'
                 );
             }
 
@@ -78,11 +130,21 @@ const renderBookingCheckout =
                 );
             }
 
+            if (
+                !booking.isActive ||
+                booking.status !==
+                    'PENDING'
+            ) {
+                return res.status(400).send(
+                    'This booking is no longer available'
+                );
+            }
+
             const provider =
                 await User.findById(
-                    req.user.id
+                    offer.provider
                 ).select(
-                    'firstName lastName email mobile'
+                    'firstName lastName email mobile bookingCredits'
                 );
 
             if (!provider) {
@@ -97,7 +159,7 @@ const renderBookingCheckout =
                 ) > 0
             ) {
                 return res.status(400).send(
-                    'You have free booking credits. Payment is not required.'
+                    'Provider has free booking credits. Payment is not required.'
                 );
             }
 
@@ -122,7 +184,7 @@ const renderBookingCheckout =
                         offer._id,
 
                     provider:
-                        req.user.id,
+                        offer.provider,
 
                     status: {
                         $in: [
@@ -132,9 +194,7 @@ const renderBookingCheckout =
                     },
                 });
 
-            // Create order automatically if needed
             if (!payment) {
-
                 const receipt =
                     `booking_${String(
                         booking._id
@@ -163,7 +223,7 @@ const renderBookingCheckout =
 
                             providerId:
                                 String(
-                                    req.user.id
+                                    offer.provider
                                 ),
 
                             type:
@@ -180,7 +240,7 @@ const renderBookingCheckout =
                             offer._id,
 
                         provider:
-                            req.user.id,
+                            offer.provider,
 
                         amount:
                             accessFee,
@@ -246,15 +306,14 @@ const renderBookingCheckout =
                         `${provider.firstName || ''} ${provider.lastName || ''}`.trim(),
 
                     providerEmail:
-                        provider.email,
+                        provider.email || '',
 
                     providerMobile:
-                        provider.mobile,
+                        provider.mobile || '',
                 }
             );
 
         } catch (error) {
-
             console.error(
                 'Render Booking Checkout Error:',
                 error
@@ -265,62 +324,10 @@ const renderBookingCheckout =
             );
         }
     };
-// ============================================================
-// CALCULATE BOOKING ACCESS FEE
-// ============================================================
-
-const getBookingAccessFee = ({
-    distanceKm,
-}) => {
-    const distance =
-        Number(distanceKm);
-
-    if (
-        !Number.isFinite(distance) ||
-        distance < 0
-    ) {
-        throw new Error(
-            'Invalid booking distance'
-        );
-    }
-
-    const baseFee =
-        Number(
-            process.env.BOOKING_FEE_BASE || 20
-        );
-
-    const perKmFee =
-        Number(
-            process.env.BOOKING_FEE_PER_KM || 5
-        );
-
-    const amount =
-        Number(
-            (
-                baseFee +
-                distance * perKmFee
-            ).toFixed(2)
-        );
-
-    if (
-        !Number.isFinite(amount) ||
-        amount <= 0
-    ) {
-        throw new Error(
-            'Invalid booking access fee'
-        );
-    }
-
-    return amount;
-};
 
 
 // ============================================================
 // REFERRAL SUCCESS
-// ============================================================
-// Referral becomes SUCCESS on the referred provider's
-// first successfully assigned job.
-// Works for both FREE and PAID approval.
 // ============================================================
 
 const completeReferralIfRequired = async ({
@@ -347,8 +354,6 @@ const completeReferralIfRequired = async ({
             0
         );
 
-    // Even if reward is 0, the referral itself
-    // should still become SUCCESS.
     if (rewardCredits > 0) {
         await addBookingCredits({
             providerId:
@@ -438,7 +443,6 @@ const refundLosingPayment = async ({
         return null;
     }
 
-    // Already refunded
     if (
         payment.status ===
         'REFUNDED'
@@ -451,19 +455,22 @@ const refundLosingPayment = async ({
             await razorpay.payments.refund(
                 payment.razorpayPaymentId,
                 {
-                    amount: Math.round(
-                        Number(
-                            payment.amount
-                        ) * 100
-                    ),
+                    amount:
+                        Math.round(
+                            Number(
+                                payment.amount
+                            ) * 100
+                        ),
 
                     notes: {
                         reason:
                             'Another provider won the booking',
+
                         bookingId:
                             String(
                                 payment.booking
                             ),
+
                         offerId:
                             String(
                                 payment.offer
@@ -476,19 +483,18 @@ const refundLosingPayment = async ({
             'REFUNDED';
 
         payment.failureReason =
-            'Booking was already assigned to another provider. Payment refunded.';
+            'Another provider won the booking. Payment refunded.';
 
         await payment.save();
 
         return refund;
+
     } catch (error) {
         console.error(
             'Refund Losing Payment Error:',
             error
         );
 
-        // Keep payment as PAID because refund did not complete.
-        // Manual/admin retry can be handled later.
         return null;
     }
 };
@@ -575,7 +581,7 @@ const finalizePaidBooking = async ({
     }
 
     // ========================================================
-    // BOOKING ALREADY WON BY SOMEONE ELSE
+    // BOOKING ALREADY WON BY ANOTHER PROVIDER
     // ========================================================
 
     if (
@@ -627,16 +633,6 @@ const finalizePaidBooking = async ({
     // ========================================================
     // ATOMIC BOOKING CLAIM
     // ========================================================
-    //
-    // First successful provider wins.
-    //
-    // Only one request can change:
-    //
-    // provider: null
-    //        ↓
-    // provider: current provider
-    //
-    // ========================================================
 
     const claimedBooking =
         await Booking.findOneAndUpdate(
@@ -672,7 +668,7 @@ const finalizePaidBooking = async ({
         );
 
     // ========================================================
-    // THIS PROVIDER LOST THE RACE
+    // PROVIDER LOST THE RACE
     // ========================================================
 
     if (!claimedBooking) {
@@ -701,7 +697,7 @@ const finalizePaidBooking = async ({
     }
 
     // ========================================================
-    // PAYMENT IS SUCCESSFUL
+    // PAYMENT SUCCESS
     // ========================================================
 
     payment.status =
@@ -736,7 +732,7 @@ const finalizePaidBooking = async ({
     await offer.save();
 
     // ========================================================
-    // COMPLETE REFERRAL
+    // REFERRAL
     // ========================================================
 
     await completeReferralIfRequired({
@@ -796,10 +792,6 @@ const createBookingPaymentOrder =
                 });
             }
 
-            // ====================================================
-            // FIND OFFER
-            // ====================================================
-
             const offer =
                 await BookingOffer.findById(
                     offerId
@@ -815,10 +807,6 @@ const createBookingPaymentOrder =
                 });
             }
 
-            // ====================================================
-            // PROVIDER AUTHORIZATION
-            // ====================================================
-
             if (
                 offer.provider.toString() !==
                 req.user.id.toString()
@@ -832,10 +820,6 @@ const createBookingPaymentOrder =
                 });
             }
 
-            // ====================================================
-            // OFFER STATUS
-            // ====================================================
-
             if (
                 offer.status !==
                 'USER_ACCEPTED'
@@ -848,10 +832,6 @@ const createBookingPaymentOrder =
                         'This offer is not waiting for provider approval',
                 });
             }
-
-            // ====================================================
-            // APPROVAL WINDOW
-            // ====================================================
 
             if (
                 offer.providerApprovalExpiresAt &&
@@ -871,10 +851,6 @@ const createBookingPaymentOrder =
                         'Provider approval window has expired',
                 });
             }
-
-            // ====================================================
-            // BOOKING
-            // ====================================================
 
             const booking =
                 await Booking.findById(
@@ -905,10 +881,6 @@ const createBookingPaymentOrder =
                 });
             }
 
-            // ====================================================
-            // PROVIDER
-            // ====================================================
-
             const provider =
                 await User.findById(
                     req.user.id
@@ -923,10 +895,6 @@ const createBookingPaymentOrder =
                         'Provider not found',
                 });
             }
-
-            // ====================================================
-            // FREE CREDIT AVAILABLE
-            // ====================================================
 
             if (
                 Number(
@@ -952,10 +920,6 @@ const createBookingPaymentOrder =
                 });
             }
 
-            // ====================================================
-            // DISTANCE
-            // ====================================================
-
             if (
                 offer.distanceKm ===
                     null ||
@@ -971,19 +935,11 @@ const createBookingPaymentOrder =
                 });
             }
 
-            // ====================================================
-            // CALCULATE FEE SERVER SIDE
-            // ====================================================
-
             const accessFee =
                 getBookingAccessFee({
                     distanceKm:
                         offer.distanceKm,
                 });
-
-            // ====================================================
-            // EXISTING PAYMENT
-            // ====================================================
 
             const existingPayment =
                 await BookingPayment.findOne({
@@ -1044,10 +1000,6 @@ const createBookingPaymentOrder =
                 });
             }
 
-            // ====================================================
-            // CREATE RAZORPAY ORDER
-            // ====================================================
-
             const receipt =
                 `booking_${String(
                     booking._id
@@ -1061,9 +1013,7 @@ const createBookingPaymentOrder =
                     currency:
                         'INR',
 
-                    receipt:
-
-                        receipt,
+                    receipt,
 
                     notes: {
                         bookingId:
@@ -1085,10 +1035,6 @@ const createBookingPaymentOrder =
                             'BOOKING_ACCESS_FEE',
                     },
                 });
-
-            // ====================================================
-            // SAVE PAYMENT
-            // ====================================================
 
             const payment =
                 await BookingPayment.create({
@@ -1116,10 +1062,6 @@ const createBookingPaymentOrder =
                     description:
                         'Provider job access fee',
                 });
-
-            // ====================================================
-            // UPDATE OFFER
-            // ====================================================
 
             offer.accessType =
                 'PAID';
@@ -1255,10 +1197,6 @@ const verifyBookingPayment =
                 });
             }
 
-            // ====================================================
-            // VERIFY ORDER ID
-            // ====================================================
-
             if (
                 payment.razorpayOrderId !==
                 razorpayOrderId
@@ -1271,10 +1209,6 @@ const verifyBookingPayment =
                         'Invalid Razorpay order',
                 });
             }
-
-            // ====================================================
-            // VERIFY SIGNATURE
-            // ====================================================
 
             const isValid =
                 verifyPaymentSignature({
@@ -1309,23 +1243,16 @@ const verifyBookingPayment =
                 });
             }
 
-            // ====================================================
-            // SAVE PAYMENT IDS
-            // ====================================================
-
             payment.razorpayPaymentId =
                 razorpayPaymentId;
 
             payment.razorpaySignature =
                 razorpaySignature;
 
-            payment.status =
-                'PENDING';
-
             await payment.save();
 
             // ====================================================
-            // FETCH PAYMENT FROM RAZORPAY
+            // FETCH PAYMENT
             // ====================================================
 
             let razorpayPayment;
@@ -1346,7 +1273,7 @@ const verifyBookingPayment =
                         true,
 
                     message:
-                        'Payment received. Waiting for Razorpay webhook confirmation.',
+                        'Payment received. Waiting for Razorpay confirmation.',
 
                     data: {
                         paymentId:
@@ -1420,7 +1347,7 @@ const verifyBookingPayment =
                     true,
 
                 message:
-                    'Payment signature verified. Waiting for payment capture/webhook.',
+                    'Payment signature verified. Waiting for capture.',
 
                 data: {
                     paymentId:
@@ -1457,6 +1384,21 @@ const verifyBookingPayment =
 // ============================================================
 // RAZORPAY WEBHOOK
 // ============================================================
+//
+// IMPORTANT:
+//
+// Keep this handler FAST.
+//
+// Do NOT:
+// - finalize booking
+// - reject other offers
+// - process referral
+// - call refund API
+//
+// Those operations are handled by verifyBookingPayment().
+//
+// Webhook only records the payment event and returns 200.
+// ============================================================
 
 const razorpayWebhook =
     async (req, res) => {
@@ -1477,7 +1419,7 @@ const razorpayWebhook =
             }
 
             // ====================================================
-            // VERIFY RAW BODY
+            // VERIFY SIGNATURE
             // ====================================================
 
             const isValid =
@@ -1500,7 +1442,7 @@ const razorpayWebhook =
             }
 
             // ====================================================
-            // PARSE RAW BODY
+            // PARSE BODY
             // ====================================================
 
             let eventBody;
@@ -1512,9 +1454,7 @@ const razorpayWebhook =
                             'utf8'
                         )
                     );
-            } catch (
-                parseError
-            ) {
+            } catch (parseError) {
                 return res.status(400).json({
                     success:
                         false,
@@ -1526,6 +1466,12 @@ const razorpayWebhook =
 
             const event =
                 eventBody.event;
+
+            const eventId =
+                req.headers[
+                    'x-razorpay-event-id'
+                ] ||
+                null;
 
             // ====================================================
             // PAYMENT CAPTURED / ORDER PAID
@@ -1587,7 +1533,7 @@ const razorpayWebhook =
                             true,
 
                         message:
-                            'Webhook received but order ID was not found',
+                            'Webhook received',
                     });
                 }
 
@@ -1608,70 +1554,61 @@ const razorpayWebhook =
                 }
 
                 // ==================================================
-                // UPDATE PAYMENT DETAILS
+                // SAVE PAYMENT INFORMATION ONLY
                 // ==================================================
 
                 payment.razorpayPaymentId =
                     paymentId ||
                     payment.razorpayPaymentId;
 
+                payment.status =
+                    'PAID';
+
+                payment.paidAt =
+                    payment.paidAt ||
+                    new Date();
+
                 payment.webhookVerified =
                     true;
 
                 payment.webhookEvent =
-                    event;
+                    eventId
+                        ? `${event}:${eventId}`
+                        : event;
 
                 await payment.save();
 
                 // ==================================================
-                // FINALIZE
+                // UPDATE OFFER ONLY
                 // ==================================================
 
-                const result =
-                    await finalizePaidBooking({
-                        payment:
-                            payment,
-                    });
+                await BookingOffer.findByIdAndUpdate(
+                    payment.offer,
+                    {
+                        $set: {
+                            paymentStatus:
+                                'PAID',
+
+                            paymentId:
+                                paymentId ||
+                                payment.razorpayPaymentId,
+
+                            paymentPaidAt:
+                                payment.paidAt,
+                        },
+                    }
+                );
 
                 // ==================================================
-                // SUCCESS
+                // RETURN IMMEDIATELY
                 // ==================================================
-
-                if (
-                    result.success
-                ) {
-                    return res.status(200).json({
-                        success:
-                            true,
-
-                        message:
-                            'Payment webhook processed and booking approved',
-                    });
-                }
-
-                // ==================================================
-                // OTHER PROVIDER WON
-                // ==================================================
-
-                if (
-                    result.bookingAlreadyAssigned
-                ) {
-                    return res.status(200).json({
-                        success:
-                            true,
-
-                        message:
-                            'Payment received, but another provider won the booking. Refund processed/initiated.',
-                    });
-                }
 
                 return res.status(200).json({
                     success:
                         true,
 
                     message:
-                        result.message ||
-                        'Webhook processed',
+                        'Payment webhook received successfully',
                 });
             }
 
@@ -1734,7 +1671,9 @@ const razorpayWebhook =
                         true;
 
                     payment.webhookEvent =
-                        event;
+                        eventId
+                            ? `${event}:${eventId}`
+                            : event;
 
                     payment.failureReason =
                         eventBody
@@ -1746,17 +1685,15 @@ const razorpayWebhook =
 
                     await payment.save();
 
-                    const offer =
-                        await BookingOffer.findById(
-                            payment.offer
-                        );
-
-                    if (offer) {
-                        offer.paymentStatus =
-                            'FAILED';
-
-                        await offer.save();
-                    }
+                    await BookingOffer.findByIdAndUpdate(
+                        payment.offer,
+                        {
+                            $set: {
+                                paymentStatus:
+                                    'FAILED',
+                            },
+                        }
+                    );
                 }
 
                 return res.status(200).json({
@@ -1764,12 +1701,12 @@ const razorpayWebhook =
                         true,
 
                     message:
-                        'Payment failure webhook processed',
+                        'Payment failure webhook received',
                 });
             }
 
             // ====================================================
-            // OTHER WEBHOOK EVENTS
+            // OTHER EVENTS
             // ====================================================
 
             return res.status(200).json({
@@ -1786,12 +1723,15 @@ const razorpayWebhook =
                 error
             );
 
-            return res.status(500).json({
+            // IMPORTANT:
+            // For webhook reliability, do not leave Razorpay
+            // waiting on long processing.
+            return res.status(200).json({
                 success:
-                    false,
+                    true,
 
                 message:
-                    'Webhook processing failed',
+                    'Webhook received',
             });
         }
     };

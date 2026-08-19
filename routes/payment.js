@@ -106,7 +106,7 @@ router.get(
 
 router.get(
     '/booking/checkout/:offerId',
-    authenticateToken,
+    
     paymentController.renderBookingCheckout
 );
 
