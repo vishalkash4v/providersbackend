@@ -8,6 +8,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1113.0",
     "bcryptjs": "^3.0.3",
+    "body-parser": "^2.3.0",
     "cookie-parser": "~1.4.4",
     "debug": "~2.6.9",
     "dotenv": "^17.4.2",
@@ -20,7 +21,8 @@
     "mongoose": "^9.9.2",
     "morgan": "~1.9.1",
     "nodemailer": "^9.0.5",
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "razorpay": "^2.9.8"
   },
   "devDependencies": {
     "uglify-js": "^3.19.3"

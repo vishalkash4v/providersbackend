@@ -52,23 +52,82 @@ router.delete(
 );
 
 
+// ============================================================
+// UPDATE BOOKING ACTIVE / INACTIVE STATUS
+// ============================================================
+
 router.patch(
   '/status/:id',
   authenticateToken,
   bookingController.updateBookingStatus
 );
 
-router.patch(
-  '/:id/accept',
+
+// ============================================================
+// PROVIDER SEND OFFER
+// ============================================================
+//
+// Provider receives booking request and sends his offer amount.
+//
+// Example:
+// POST /api/booking/:id/offer
+//
+// Body:
+// {
+//   "offerAmount": 500
+// }
+//
+
+router.post(
+  '/:id/offer',
   authenticateToken,
-  bookingController.acceptBooking
+  bookingController.createBookingOffer
 );
 
+
+// ============================================================
+// USER ACCEPT OFFER
+// ============================================================
+//
+// User can accept multiple provider offers.
+//
+// Example:
+// PATCH /api/booking/offers/:offerId/accept
+//
+
 router.patch(
-  '/:id/reject',
+  '/offers/:offerId/accept',
   authenticateToken,
-  bookingController.rejectBooking
+  bookingController.acceptBookingOffer
 );
+
+
+// ============================================================
+// PROVIDER APPROVE OFFER
+// ============================================================
+//
+// After user accepts provider offer,
+// provider gets approval request.
+//
+// At provider approval stage:
+// - Free booking credit is checked
+// - OR payment is required
+// - First successful provider approval wins
+//
+// Example:
+// PATCH /api/booking/offers/:offerId/approve
+//
+
+router.patch(
+  '/offers/:offerId/approve',
+  authenticateToken,
+  bookingController.approveBookingOffer
+);
+
+
+// ============================================================
+// PROVIDER PROPOSE VISIT TIME
+// ============================================================
 
 router.patch(
   '/:id/propose-visit',
@@ -76,11 +135,21 @@ router.patch(
   bookingController.proposeVisitTime
 );
 
+
+// ============================================================
+// USER ACCEPT VISIT TIME
+// ============================================================
+
 router.patch(
   '/:id/accept-visit',
   authenticateToken,
   bookingController.acceptVisitTime
 );
+
+
+// ============================================================
+// USER COUNTER VISIT TIME
+// ============================================================
 
 router.patch(
   '/:id/counter-visit',
@@ -88,11 +157,17 @@ router.patch(
   bookingController.counterVisitTime
 );
 
+
+// ============================================================
+// PROVIDER ACCEPT COUNTER VISIT TIME
+// ============================================================
+
 router.patch(
   '/:id/accept-counter-visit',
   authenticateToken,
   bookingController.acceptCounterVisitTime
 );
+
 
 // ============================================================
 // USER BOOKINGS
@@ -104,6 +179,7 @@ router.get(
   bookingController.getMyBookings
 );
 
+
 // ============================================================
 // BOOKING DETAILS
 // ============================================================
@@ -113,6 +189,7 @@ router.get(
   authenticateToken,
   bookingController.getBookingDetails
 );
+
 
 // ============================================================
 // PROVIDER JOBS
@@ -124,6 +201,7 @@ router.get(
   bookingController.getProviderJobs
 );
 
+
 // ============================================================
 // PROVIDER JOB DETAILS
 // ============================================================
@@ -133,5 +211,6 @@ router.get(
   authenticateToken,
   bookingController.getProviderJobDetails
 );
+
 
 module.exports = router;

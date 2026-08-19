@@ -4,15 +4,13 @@ const mongoose = require('mongoose');
 |--------------------------------------------------------------------------
 | Location Schema
 |--------------------------------------------------------------------------
-| GeoJSON Point format:
+| GeoJSON Point:
 |
 | {
 |   type: 'Point',
 |   coordinates: [longitude, latitude],
 |   name: 'Una, Himachal Pradesh, India'
 | }
-|
-| The complete location field is optional.
 |--------------------------------------------------------------------------
 */
 
@@ -112,35 +110,25 @@ const userSchema = new mongoose.Schema(
 
     // ===================== ROLE =====================
 
+    /*
+     * 0 = Customer
+     * 1 = Provider
+     * 2 = Admin
+     */
+
     role: {
       type: Number,
       enum: [0, 1, 2],
       default: 0,
-
-      // 0 = Customer
-      // 1 = Provider
-      // 2 = Admin
     },
 
 
     // ===================== LOCATION =====================
 
     /*
-     * IMPORTANT:
+     * Completely optional.
      *
-     * Location is completely optional.
-     *
-     * If the user does not provide location:
-     *
-     * location will NOT be created.
-     *
-     * If provided:
-     *
-     * location: {
-     *   type: 'Point',
-     *   coordinates: [longitude, latitude],
-     *   name: 'Una, Himachal Pradesh, India'
-     * }
+     * If not provided, location remains undefined.
      */
 
     location: {
@@ -165,10 +153,9 @@ const userSchema = new mongoose.Schema(
     },
 
     /*
-     * User who referred this user.
+     * The user who referred this user.
      *
-     * This stores the referrer's MongoDB _id,
-     * NOT their referral code.
+     * Stores MongoDB User _id.
      */
 
     referredBy: {
@@ -178,12 +165,56 @@ const userSchema = new mongoose.Schema(
     },
 
 
+    // ===================== BOOKING CREDITS =====================
+
+    /*
+     * Currently available booking credits.
+     *
+     * Example:
+     *
+     * bookingCredits = 52
+     */
+
+    bookingCredits: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /*
+     * Total booking credits ever added.
+     *
+     * Example:
+     *
+     * Referral reward       +3
+     * Subscription         +50
+     *
+     * bookingCreditsTotal = 53
+     *
+     * If provider uses 1 credit:
+     *
+     * bookingCredits      = 52
+     * bookingCreditsTotal = 53
+     */
+
+    bookingCreditsTotal: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+
     // ===================== VERIFICATION =====================
 
     isVerified: {
       type: Boolean,
       default: false,
     },
+
+    /*
+     * 0 = Registration OTP
+     * 1 = Forgot Password OTP
+     */
 
     otpType: {
       type: Number,
@@ -232,12 +263,11 @@ const userSchema = new mongoose.Schema(
 | GeoJSON Index
 |--------------------------------------------------------------------------
 |
-| This allows future queries like:
+| Allows queries such as:
 |
 | Find providers within 10 KM.
 |
-| IMPORTANT:
-| Documents without location are completely fine.
+| Users without location are completely fine.
 |--------------------------------------------------------------------------
 */
 
@@ -246,6 +276,9 @@ userSchema.index({
 });
 
 
-const User = mongoose.model('User', userSchema);
+const User = mongoose.model(
+  'User',
+  userSchema
+);
 
 module.exports = User;

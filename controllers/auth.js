@@ -14,6 +14,7 @@ const {
 const {
   generateReferralCode,
 } = require('../utils/referral');
+const Referral = require('../models/Referral');
 const {
   saveUserDevice,
 } = require('../utils/device');
@@ -418,6 +419,52 @@ module.exports = {
 
         await existingUser.save();
 
+
+        // ============================================================
+        // CREATE REFERRAL FOR EXISTING UNVERIFIED PROVIDER
+        // ONLY IF REFERRAL DOES NOT ALREADY EXIST
+        // ============================================================
+
+        if (
+          Number(existingUser.role) === 1 &&
+          referredBy
+        ) {
+          const referringUser =
+            await User.findById(referredBy)
+              .select('_id role');
+
+          if (
+            referringUser &&
+            Number(referringUser.role) === 1
+          ) {
+            const existingReferral =
+              await Referral.findOne({
+                referredProvider:
+                  existingUser._id,
+              });
+
+            if (!existingReferral) {
+              await Referral.create({
+                referrer:
+                  referringUser._id,
+
+                referredProvider:
+                  existingUser._id,
+
+                referralCode:
+                  enteredReferralCode
+                    .trim()
+                    .toUpperCase(),
+
+                status:
+                  'PENDING',
+
+                rewardCredits:
+                  0,
+              });
+            }
+          }
+        }
         // ==========================================================
         // SAVE / UPDATE DEVICE
         // ==========================================================
@@ -591,6 +638,49 @@ module.exports = {
         await User.create(
           userData
         );
+
+      // ============================================================
+      // CREATE REFERRAL RECORD
+      // ============================================================
+
+      // ============================================================
+      // CREATE PROVIDER -> PROVIDER REFERRAL
+      // ============================================================
+
+      if (
+        Number(user.role) === 1 &&
+        referredBy
+      ) {
+        const referringUser =
+          await User.findById(referredBy)
+            .select('_id role');
+
+        // Referral is valid only when
+        // Provider refers another Provider.
+        if (
+          referringUser &&
+          Number(referringUser.role) === 1
+        ) {
+          await Referral.create({
+            referrer:
+              referringUser._id,
+
+            referredProvider:
+              user._id,
+
+            referralCode:
+              enteredReferralCode
+                .trim()
+                .toUpperCase(),
+
+            status:
+              'PENDING',
+
+            rewardCredits:
+              0,
+          });
+        }
+      }
 
       // ============================================================
       // SAVE / UPDATE DEVICE
@@ -928,6 +1018,11 @@ module.exports = {
             user.isActive,
 
           hasWorkDetails,
+          bookingCredits:
+            Number(user.bookingCredits || 0),
+
+          bookingCreditsTotal:
+            Number(user.bookingCreditsTotal || 0),
         },
       });
 

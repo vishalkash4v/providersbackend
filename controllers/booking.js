@@ -3,16 +3,26 @@ const mongoose = require('mongoose');
 const Booking = require('../models/Booking');
 const Service = require('../models/Service');
 const ProviderProfile = require('../models/ProviderProfile');
+const User = require('../models/User');
+const Referral = require('../models/Referral');
+const BookingOffer = require('../models/BookingOffer');
 
-const { validate } = require('../utils/fieldValidations');
-const { uploadFiles } = require('../utils/r2uploads');
-const { calculateDistance } = require('../utils/distance');
-const { notifyUser } = require('../utils/notification');
+const { validate } =
+    require('../utils/fieldValidations');
 
+const { uploadFiles } =
+    require('../utils/r2uploads');
 
-// ============================================================
-// HELPER: NOTIFY MATCHING PROVIDERS
-// ============================================================
+const { calculateDistance } =
+    require('../utils/distance');
+
+const { notifyUser } =
+    require('../utils/notification');
+
+const {
+    useBookingCredit,
+    addBookingCredits,
+} = require('../utils/bookingCredits');
 
 const notifyMatchingProviders = async (
     booking,
@@ -1635,10 +1645,19 @@ module.exports = {
         }
     },
 
-
-    acceptBooking: async (req, res) => {
+    createBookingOffer: async (req, res) => {
         try {
             const { id } = req.params;
+            const { offerAmount } = req.body;
+
+            const amount = Number(offerAmount);
+
+            if (!Number.isFinite(amount) || amount < 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Valid offerAmount is required',
+                });
+            }
 
             const booking = await Booking.findOne({
                 _id: id,
@@ -1649,106 +1668,741 @@ module.exports = {
             if (!booking) {
                 return res.status(404).json({
                     success: false,
-                    message: 'Booking not found or no longer available',
+                    message:
+                        'Booking not found or no longer available',
                 });
             }
 
-            // Provider can accept only if this provider was notified
+            // Provider must have received this booking request
             const isProviderNotified =
                 booking.notifiedProviders &&
                 booking.notifiedProviders.some(
                     providerId =>
-                        providerId.toString() === req.user.id.toString()
+                        providerId.toString() ===
+                        req.user.id.toString()
                 );
 
             if (!isProviderNotified) {
                 return res.status(403).json({
                     success: false,
-                    message: 'You are not eligible for this booking',
+                    message:
+                        'You are not eligible for this booking',
                 });
             }
 
-            // Assign provider
-            booking.provider = req.user.id;
+            // One provider can submit only one offer
+            const existingOffer =
+                await BookingOffer.findOne({
+                    booking: booking._id,
+                    provider: req.user.id,
+                });
 
-            // Job remains pending until date/time is confirmed
-            booking.status = 'PENDING';
+            if (existingOffer) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'You have already submitted an offer for this booking',
+                    data: existingOffer,
+                });
+            }
 
-            booking.dateTimeStatus = 'NOT_PROPOSED';
+            const offer =
+                await BookingOffer.create({
+                    booking:
+                        booking._id,
 
-            booking.providerAcceptedAt = new Date();
+                    provider:
+                        req.user.id,
 
-            await booking.save();
+                    offerAmount:
+                        amount,
 
-            return res.status(200).json({
+                    status:
+                        'PENDING',
+                });
+
+            await notifyUser({
+                userId:
+                    booking.user,
+
+                type:
+                    'BOOKING_OFFER_RECEIVED',
+
+                title:
+                    'New Provider Offer',
+
+                message:
+                    `A provider submitted an offer of ₹${amount.toFixed(2)} for your service request.`,
+
+                bookingId:
+                    booking._id,
+
+                serviceId:
+                    booking.service?._id ||
+                    booking.service,
+
+                data: {
+                    bookingId:
+                        String(booking._id),
+
+                    offerId:
+                        String(offer._id),
+
+                    providerId:
+                        String(req.user.id),
+
+                    offerAmount:
+                        String(amount),
+
+                    status:
+                        offer.status,
+                },
+            });
+
+            return res.status(201).json({
                 success: true,
-                message: 'Booking accepted successfully',
-                data: booking,
+                message:
+                    'Offer submitted successfully',
+                data:
+                    offer,
             });
 
         } catch (error) {
-            console.error('Accept Booking Error:', error);
+            console.error(
+                'Create Booking Offer Error:',
+                error
+            );
 
             return res.status(500).json({
                 success: false,
-                message: 'Something went wrong',
-                error: error.message,
+                message:
+                    'Something went wrong',
+                error:
+                    error.message,
+            });
+        }
+    },
+    acceptBookingOffer: async (req, res) => {
+        try {
+            const { offerId } =
+                req.params;
+
+            const offer =
+                await BookingOffer.findById(
+                    offerId
+                ).populate(
+                    'booking',
+                    'user service status isActive location address'
+                );
+
+            if (!offer) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        'Offer not found',
+                });
+            }
+
+            if (!offer.booking) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        'Booking not found',
+                });
+            }
+
+            // Only booking owner can accept offer
+            if (
+                offer.booking.user.toString() !==
+                req.user.id.toString()
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        'You are not authorized to accept this offer',
+                });
+            }
+
+            if (
+                !offer.booking.isActive ||
+                offer.booking.status !==
+                'PENDING'
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'This booking is no longer available',
+                });
+            }
+
+            if (
+                offer.status !==
+                'PENDING'
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'This offer cannot be accepted',
+                });
+            }
+
+            const approvalMinutes =
+                Number(
+                    process.env
+                        .PROVIDER_APPROVAL_WINDOW_MINUTES ||
+                    10
+                );
+
+            offer.status =
+                'USER_ACCEPTED';
+
+            offer.userAcceptedAt =
+                new Date();
+
+            offer.providerApprovalExpiresAt =
+                new Date(
+                    Date.now() +
+                    approvalMinutes *
+                    60 *
+                    1000
+                );
+
+            await offer.save();
+
+            // Notify provider
+            await notifyUser({
+                userId:
+                    offer.provider,
+
+                type:
+                    'BOOKING_OFFER_ACCEPTED_BY_USER',
+
+                title:
+                    'Your Offer Was Accepted',
+
+                message:
+                    'The customer accepted your offer. Please approve the booking before the approval window expires.',
+
+                bookingId:
+                    offer.booking._id,
+
+                serviceId:
+                    offer.booking.service,
+
+                data: {
+                    bookingId:
+                        String(
+                            offer.booking._id
+                        ),
+
+                    offerId:
+                        String(
+                            offer._id
+                        ),
+
+                    offerAmount:
+                        String(
+                            offer.offerAmount
+                        ),
+
+                    status:
+                        offer.status,
+
+                    approvalExpiresAt:
+                        offer.providerApprovalExpiresAt,
+                },
+            });
+
+            return res.status(200).json({
+                success: true,
+
+                message:
+                    'Offer accepted. Provider approval is now required.',
+
+                data:
+                    offer,
+            });
+
+        } catch (error) {
+            console.error(
+                'Accept Booking Offer Error:',
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    'Something went wrong',
+                error:
+                    error.message,
             });
         }
     },
 
-    rejectBooking: async (req, res) => {
+    approveBookingOffer: async (req, res) => {
         try {
-            const { id } = req.params;
+            const { offerId } =
+                req.params;
 
-            const booking = await Booking.findOne({
-                _id: id,
-                isActive: true,
-                status: 'PENDING',
-            }).populate('service', 'name');
+            const offer =
+                await BookingOffer.findById(
+                    offerId
+                ).populate('booking');
 
-            if (!booking) {
+            if (!offer) {
                 return res.status(404).json({
                     success: false,
-                    message: 'Booking not found',
+                    message:
+                        'Offer not found',
                 });
             }
 
-            const isProviderNotified =
-                booking.notifiedProviders &&
-                booking.notifiedProviders.some(
-                    providerId =>
-                        providerId.toString() === req.user.id.toString()
-                );
-
-            if (!isProviderNotified) {
+            // Only offer's provider can approve
+            if (
+                offer.provider.toString() !==
+                req.user.id.toString()
+            ) {
                 return res.status(403).json({
                     success: false,
-                    message: 'You are not eligible for this booking',
+                    message:
+                        'You are not authorized to approve this offer',
                 });
             }
 
-            // Remove provider from notification list
-            booking.notifiedProviders =
-                booking.notifiedProviders.filter(
-                    providerId =>
-                        providerId.toString() !== req.user.id.toString()
+            if (!offer.booking) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        'Booking not found',
+                });
+            }
+
+            const booking =
+                offer.booking;
+
+            if (
+                !booking.isActive ||
+                booking.status !==
+                'PENDING'
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'This booking is no longer available',
+                });
+            }
+
+            if (
+                offer.status !==
+                'USER_ACCEPTED'
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'This offer is not waiting for provider approval',
+                });
+            }
+
+            // Approval time expired
+            if (
+                offer.providerApprovalExpiresAt &&
+                offer.providerApprovalExpiresAt <
+                new Date()
+            ) {
+                offer.status =
+                    'EXPIRED';
+
+                await offer.save();
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'Provider approval window has expired',
+                });
+            }
+
+            const provider =
+                await User.findById(
+                    req.user.id
                 );
 
-            await booking.save();
+            if (!provider) {
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        'Provider not found',
+                });
+            }
 
-            return res.status(200).json({
-                success: true,
-                message: 'Booking declined successfully',
+            // ========================================================
+            // PROVIDER LOCATION
+            // ========================================================
+
+            const providerProfile =
+                await ProviderProfile.findOne({
+                    user:
+                        req.user.id,
+                });
+
+            if (
+                !providerProfile ||
+                !providerProfile.location ||
+                !Array.isArray(
+                    providerProfile.location
+                        .coordinates
+                ) ||
+                providerProfile.location
+                    .coordinates
+                    .length !== 2
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'Provider location is required to calculate job access fee',
+                });
+            }
+
+            if (
+                !booking.location ||
+                !Array.isArray(
+                    booking.location
+                        .coordinates
+                ) ||
+                booking.location
+                    .coordinates
+                    .length !== 2
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        'Booking location is not available',
+                });
+            }
+
+            const [
+                providerLng,
+                providerLat,
+            ] =
+                providerProfile.location
+                    .coordinates;
+
+            const [
+                bookingLng,
+                bookingLat,
+            ] =
+                booking.location
+                    .coordinates;
+
+            const distanceKm =
+                calculateDistance(
+                    bookingLat,
+                    bookingLng,
+                    providerLat,
+                    providerLng
+                );
+
+            offer.distanceKm =
+                Number(
+                    distanceKm.toFixed(2)
+                );
+
+            // ========================================================
+            // FREE CREDIT
+            // ========================================================
+
+            if (
+                Number(
+                    provider.bookingCredits || 0
+                ) > 0
+            ) {
+                // Atomic booking claim.
+                // First provider to successfully claim wins.
+                const claimedBooking =
+                    await Booking.findOneAndUpdate(
+                        {
+                            _id:
+                                booking._id,
+
+                            status:
+                                'PENDING',
+
+                            isActive:
+                                true,
+
+                            provider:
+                                null,
+                        },
+                        {
+                            $set: {
+                                provider:
+                                    req.user.id,
+
+                                status:
+                                    'PROVIDER_ACCEPTED',
+
+                                providerAcceptedAt:
+                                    new Date(),
+                            },
+                        },
+                        {
+                            new: true,
+                        }
+                    );
+
+                if (!claimedBooking) {
+                    return res.status(409).json({
+                        success: false,
+                        message:
+                            'Another provider has already been assigned this booking',
+                        code:
+                            'BOOKING_ALREADY_ASSIGNED',
+                    });
+                }
+
+                const creditUsed =
+                    await useBookingCredit({
+                        providerId:
+                            req.user.id,
+
+                        bookingId:
+                            booking._id,
+                    });
+
+                if (!creditUsed) {
+                    // Rollback booking assignment
+                    await Booking.findByIdAndUpdate(
+                        booking._id,
+                        {
+                            $set: {
+                                provider:
+                                    null,
+
+                                status:
+                                    'PENDING',
+
+                                providerAcceptedAt:
+                                    null,
+                            },
+                        }
+                    );
+
+                    return res.status(403).json({
+                        success: false,
+                        message:
+                            'Booking credit could not be used',
+                        code:
+                            'BOOKING_CREDIT_ERROR',
+                    });
+                }
+
+                offer.accessType =
+                    'FREE_CREDIT';
+
+                offer.accessFee =
+                    0;
+
+                offer.paymentStatus =
+                    'NOT_REQUIRED';
+
+                offer.providerApprovedAt =
+                    new Date();
+
+                offer.status =
+                    'PROVIDER_APPROVED';
+
+                await offer.save();
+
+                // ====================================================
+                // REFERRAL SUCCESS
+                // ====================================================
+
+                const referral =
+                    await Referral.findOne({
+                        referredProvider:
+                            req.user.id,
+
+                        status:
+                            'PENDING',
+                    });
+
+                if (referral) {
+                    const rewardCredits =
+                        Number(
+                            process.env
+                                .PROVIDER_FREE_JOBS_PER_REFERRAL ||
+                            0
+                        );
+
+                    if (
+                        rewardCredits > 0
+                    ) {
+                        await addBookingCredits({
+                            providerId:
+                                referral.referrer,
+
+                            amount:
+                                rewardCredits,
+
+                            type:
+                                'REFERRAL_REWARD',
+
+                            referral:
+                                referral._id,
+
+                            booking:
+                                booking._id,
+
+                            description:
+                                'Referral reward for referred provider first approved job',
+                        });
+
+                        referral.status =
+                            'SUCCESS';
+
+                        referral.firstBooking =
+                            booking._id;
+
+                        referral.successfulAt =
+                            new Date();
+
+                        referral.rewardCredits =
+                            rewardCredits;
+
+                        await referral.save();
+                    }
+                }
+
+                // Other accepted/pending offers lose the race
+                await BookingOffer.updateMany(
+                    {
+                        booking:
+                            booking._id,
+
+                        _id: {
+                            $ne:
+                                offer._id,
+                        },
+
+                        status: {
+                            $in: [
+                                'PENDING',
+                                'USER_ACCEPTED',
+                            ],
+                        },
+                    },
+                    {
+                        $set: {
+                            status:
+                                'REJECTED',
+                        },
+                    }
+                );
+
+                return res.status(200).json({
+                    success: true,
+
+                    message:
+                        'Booking approved successfully using free booking credit',
+
+                    data: {
+                        booking:
+                            claimedBooking,
+
+                        offer:
+                            offer,
+
+                        bookingCredits:
+                            Math.max(
+                                0,
+                                Number(
+                                    provider.bookingCredits ||
+                                    0
+                                ) - 1
+                            ),
+                    },
+                });
+            }
+
+            // ========================================================
+            // NO FREE CREDIT
+            // CALCULATE PAYMENT
+            // ========================================================
+
+            const baseFee =
+                Number(
+                    process.env
+                        .BOOKING_FEE_BASE ||
+                    20
+                );
+
+            const perKmFee =
+                Number(
+                    process.env
+                        .BOOKING_FEE_PER_KM ||
+                    5
+                );
+
+            const accessFee =
+                Number(
+                    (
+                        baseFee +
+                        Number(
+                            distanceKm
+                        ) *
+                        perKmFee
+                    ).toFixed(2)
+                );
+
+            offer.accessType =
+                'PAID';
+
+            offer.accessFee =
+                accessFee;
+
+            offer.paymentStatus =
+                'PENDING';
+
+            await offer.save();
+
+            return res.status(402).json({
+                success: false,
+
+                message:
+                    'Payment is required before you can approve this booking',
+
+                code:
+                    'BOOKING_PAYMENT_REQUIRED',
+
+                data: {
+                    offerId:
+                        offer._id,
+
+                    bookingId:
+                        booking._id,
+
+                    distanceKm:
+                        offer.distanceKm,
+
+                    accessFee:
+                        offer.accessFee,
+
+                    paymentStatus:
+                        offer.paymentStatus,
+                },
             });
 
         } catch (error) {
-            console.error('Reject Booking Error:', error);
+            console.error(
+                'Approve Booking Offer Error:',
+                error
+            );
 
             return res.status(500).json({
                 success: false,
-                message: 'Something went wrong',
-                error: error.message,
+                message:
+                    'Something went wrong',
+                error:
+                    error.message,
             });
         }
     },
