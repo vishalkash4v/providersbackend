@@ -58,5 +58,80 @@ router.patch(
   bookingController.updateBookingStatus
 );
 
+router.patch(
+  '/:id/accept',
+  authenticateToken,
+  bookingController.acceptBooking
+);
+
+router.patch(
+  '/:id/reject',
+  authenticateToken,
+  bookingController.rejectBooking
+);
+
+router.patch(
+  '/:id/propose-visit',
+  authenticateToken,
+  bookingController.proposeVisitTime
+);
+
+router.patch(
+  '/:id/accept-visit',
+  authenticateToken,
+  bookingController.acceptVisitTime
+);
+
+router.patch(
+  '/:id/counter-visit',
+  authenticateToken,
+  bookingController.counterVisitTime
+);
+
+router.patch(
+  '/:id/accept-counter-visit',
+  authenticateToken,
+  bookingController.acceptCounterVisitTime
+);
+
+// ============================================================
+// USER BOOKINGS
+// ============================================================
+
+router.get(
+  '/my-bookings',
+  authenticateToken,
+  bookingController.getMyBookings
+);
+
+// ============================================================
+// BOOKING DETAILS
+// ============================================================
+
+router.get(
+  '/details/:id',
+  authenticateToken,
+  bookingController.getBookingDetails
+);
+
+// ============================================================
+// PROVIDER JOBS
+// ============================================================
+
+router.get(
+  '/provider/jobs',
+  authenticateToken,
+  bookingController.getProviderJobs
+);
+
+// ============================================================
+// PROVIDER JOB DETAILS
+// ============================================================
+
+router.get(
+  '/provider/jobs/:id',
+  authenticateToken,
+  bookingController.getProviderJobDetails
+);
 
 module.exports = router;

@@ -1640,4 +1640,691 @@ updateBookingStatus: async (
     }
   },
 
+
+  acceptBooking: async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await Booking.findOne({
+      _id: id,
+      isActive: true,
+      status: 'PENDING',
+    }).populate('service', 'name');
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found or no longer available',
+      });
+    }
+
+    // Provider can accept only if this provider was notified
+    const isProviderNotified =
+      booking.notifiedProviders &&
+      booking.notifiedProviders.some(
+        providerId =>
+          providerId.toString() === req.user.id.toString()
+      );
+
+    if (!isProviderNotified) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not eligible for this booking',
+      });
+    }
+
+    // Assign provider
+    booking.provider = req.user.id;
+
+    // Job remains pending until date/time is confirmed
+    booking.status = 'PENDING';
+
+    booking.dateTimeStatus = 'NOT_PROPOSED';
+
+    booking.providerAcceptedAt = new Date();
+
+    await booking.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Booking accepted successfully',
+      data: booking,
+    });
+
+  } catch (error) {
+    console.error('Accept Booking Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
+rejectBooking: async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await Booking.findOne({
+      _id: id,
+      isActive: true,
+      status: 'PENDING',
+    }).populate('service', 'name');
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found',
+      });
+    }
+
+    const isProviderNotified =
+      booking.notifiedProviders &&
+      booking.notifiedProviders.some(
+        providerId =>
+          providerId.toString() === req.user.id.toString()
+      );
+
+    if (!isProviderNotified) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not eligible for this booking',
+      });
+    }
+
+    // Remove provider from notification list
+    booking.notifiedProviders =
+      booking.notifiedProviders.filter(
+        providerId =>
+          providerId.toString() !== req.user.id.toString()
+      );
+
+    await booking.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Booking declined successfully',
+    });
+
+  } catch (error) {
+    console.error('Reject Booking Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
+proposeVisitTime: async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const {
+      visitDate,
+      visitTimeStart,
+      visitTimeEnd,
+    } = req.body;
+
+    if (!visitDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Visit date is required',
+      });
+    }
+
+    const timeRegex =
+      /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+    if (
+      !visitTimeStart ||
+      !timeRegex.test(visitTimeStart)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid visitTimeStart is required. Example: 10:00',
+      });
+    }
+
+    if (
+      !visitTimeEnd ||
+      !timeRegex.test(visitTimeEnd)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid visitTimeEnd is required. Example: 12:00',
+      });
+    }
+
+    const booking = await Booking.findOne({
+      _id: id,
+      provider: req.user.id,
+      isActive: true,
+      status: 'PENDING',
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message:
+          'Booking not found or you are not assigned to this booking',
+      });
+    }
+
+    const parsedDate = new Date(visitDate);
+
+    if (isNaN(parsedDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid visit date',
+      });
+    }
+
+    booking.providerVisitDate = parsedDate;
+    booking.providerVisitTimeStart = visitTimeStart;
+    booking.providerVisitTimeEnd = visitTimeEnd;
+
+    booking.dateTimeProposedBy = 'PROVIDER';
+    booking.dateTimeStatus = 'PENDING_USER';
+    booking.dateTimeUpdatedAt = new Date();
+
+    await booking.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        'Visit date and time proposed successfully',
+      data: {
+        bookingId: booking._id,
+        visitDate: booking.providerVisitDate,
+        visitTimeStart:
+          booking.providerVisitTimeStart,
+        visitTimeEnd:
+          booking.providerVisitTimeEnd,
+        dateTimeStatus:
+          booking.dateTimeStatus,
+      },
+    });
+
+  } catch (error) {
+    console.error(
+      'Propose Visit Time Error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
+acceptVisitTime: async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await Booking.findOne({
+      _id: id,
+      user: req.user.id,
+      isActive: true,
+      status: 'PENDING',
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found',
+      });
+    }
+
+    if (
+      booking.dateTimeStatus !==
+      'PENDING_USER'
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'There is no visit time waiting for your approval',
+      });
+    }
+
+    booking.dateTimeStatus =
+      'CONFIRMED';
+
+    booking.status =
+      'CONFIRMED';
+
+    booking.dateTimeUpdatedAt =
+      new Date();
+
+    await booking.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        'Visit date and time accepted successfully',
+      data: booking,
+    });
+
+  } catch (error) {
+    console.error(
+      'Accept Visit Time Error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
+counterVisitTime: async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const {
+      visitDate,
+      visitTimeStart,
+      visitTimeEnd,
+    } = req.body;
+
+    if (!visitDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Visit date is required',
+      });
+    }
+
+    const timeRegex =
+      /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+    if (
+      !visitTimeStart ||
+      !timeRegex.test(visitTimeStart)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Valid visitTimeStart is required',
+      });
+    }
+
+    if (
+      !visitTimeEnd ||
+      !timeRegex.test(visitTimeEnd)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Valid visitTimeEnd is required',
+      });
+    }
+
+    const booking = await Booking.findOne({
+      _id: id,
+      user: req.user.id,
+      isActive: true,
+      status: 'PENDING',
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found',
+      });
+    }
+
+    if (
+      booking.dateTimeStatus !==
+      'PENDING_USER'
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'You cannot counter-propose at this stage',
+      });
+    }
+
+    const parsedDate =
+      new Date(visitDate);
+
+    if (isNaN(parsedDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid visit date',
+      });
+    }
+
+    booking.providerVisitDate =
+      parsedDate;
+
+    booking.providerVisitTimeStart =
+      visitTimeStart;
+
+    booking.providerVisitTimeEnd =
+      visitTimeEnd;
+
+    booking.dateTimeProposedBy =
+      'USER';
+
+    booking.dateTimeStatus =
+      'PENDING_PROVIDER';
+
+    booking.dateTimeUpdatedAt =
+      new Date();
+
+    await booking.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        'New visit date and time proposed successfully',
+      data: {
+        bookingId: booking._id,
+        visitDate:
+          booking.providerVisitDate,
+        visitTimeStart:
+          booking.providerVisitTimeStart,
+        visitTimeEnd:
+          booking.providerVisitTimeEnd,
+        dateTimeStatus:
+          booking.dateTimeStatus,
+      },
+    });
+
+  } catch (error) {
+    console.error(
+      'Counter Visit Time Error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
+acceptCounterVisitTime: async (
+  req,
+  res
+) => {
+  try {
+    const { id } = req.params;
+
+    const booking =
+      await Booking.findOne({
+        _id: id,
+        provider: req.user.id,
+        isActive: true,
+        status: 'PENDING',
+      });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found',
+      });
+    }
+
+    if (
+      booking.dateTimeStatus !==
+      'PENDING_PROVIDER'
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'There is no user counter proposal waiting for your approval',
+      });
+    }
+
+    booking.dateTimeStatus =
+      'CONFIRMED';
+
+    booking.status =
+      'CONFIRMED';
+
+    booking.dateTimeUpdatedAt =
+      new Date();
+
+    await booking.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        'User proposed visit date and time accepted successfully',
+      data: booking,
+    });
+
+  } catch (error) {
+    console.error(
+      'Accept Counter Visit Time Error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
+
+// ============================================================
+// GET MY BOOKINGS - USER
+// ============================================================
+
+getMyBookings: async (req, res) => {
+  try {
+    const { type } = req.query;
+
+    const query = {
+      user: req.user.id,
+      deletedAt: null,
+    };
+
+    // ============================================================
+    // BOOKING TYPE FILTER
+    // ============================================================
+
+    if (type) {
+      const normalizedType = type.toLowerCase().trim();
+
+      if (normalizedType === 'pending') {
+        query.status = {
+          $in: [
+            'PENDING',
+            'PROVIDER_ACCEPTED',
+            'SCHEDULE_NEGOTIATION',
+          ],
+        };
+      } else if (normalizedType === 'inprogress') {
+        query.status = 'IN_PROGRESS';
+      } else if (normalizedType === 'completed') {
+        query.status = 'COMPLETED';
+      } else {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Invalid type. Use pending, inprogress or completed',
+        });
+      }
+    }
+
+    const bookings = await Booking.find(query)
+      .populate('service', 'name image')
+      .populate(
+        'provider',
+        'firstName lastName mobile email profileImage'
+      )
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Bookings fetched successfully',
+      type: type || 'all',
+      count: bookings.length,
+      data: bookings,
+    });
+  } catch (error) {
+    console.error('Get My Bookings Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
+// ============================================================
+// GET BOOKING DETAILS - USER / PROVIDER
+// ============================================================
+
+getBookingDetails: async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await Booking.findOne({
+      _id: id,
+      deletedAt: null,
+    })
+      .populate(
+        'user',
+        'firstName lastName mobile email profileImage'
+      )
+      .populate(
+        'provider',
+        'firstName lastName mobile email profileImage'
+      )
+      .populate('service', 'name image');
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found',
+      });
+    }
+
+    // Only booking owner or assigned provider can see details
+    const userId = req.user.id.toString();
+
+    const isUser =
+      booking.user &&
+      booking.user._id.toString() === userId;
+
+    const isProvider =
+      booking.provider &&
+      booking.provider._id.toString() === userId;
+
+    if (!isUser && !isProvider) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to view this booking',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Booking details fetched successfully',
+      data: booking,
+    });
+  } catch (error) {
+    console.error('Get Booking Details Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
+// ============================================================
+// GET PROVIDER JOBS
+// ============================================================
+
+getProviderJobs: async (req, res) => {
+  try {
+    const providerId = req.user.id;
+
+    const bookings = await Booking.find({
+      provider: providerId,
+      deletedAt: null,
+      isActive: true,
+    })
+      .populate(
+        'user',
+        'firstName lastName mobile email profileImage'
+      )
+      .populate('service', 'name image')
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Provider jobs fetched successfully',
+      count: bookings.length,
+      data: bookings,
+    });
+  } catch (error) {
+    console.error('Get Provider Jobs Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
+// ============================================================
+// GET PROVIDER JOB DETAILS
+// ============================================================
+
+getProviderJobDetails: async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await Booking.findOne({
+      _id: id,
+      provider: req.user.id,
+      deletedAt: null,
+    })
+      .populate(
+        'user',
+        'firstName lastName mobile email profileImage'
+      )
+      .populate('provider', 'firstName lastName mobile email profileImage')
+      .populate('service', 'name image');
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Job details fetched successfully',
+      data: booking,
+    });
+  } catch (error) {
+    console.error('Get Provider Job Details Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong',
+      error: error.message,
+    });
+  }
+},
+
 };
