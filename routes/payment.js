@@ -104,5 +104,11 @@ router.get(
   paymentController.getBookingPaymentStatus
 );
 
+router.get(
+    '/booking/checkout/:offerId',
+    authenticateToken,
+    paymentController.renderBookingCheckout
+);
+
 
 module.exports = router;

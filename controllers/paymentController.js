@@ -17,6 +17,254 @@ const {
 } = require('../utils/bookingCredits');
 
 
+
+// ============================================================
+// EJS PAYMENT CHECKOUT PAGE
+// ============================================================
+// GET
+// /api/payment/booking/checkout/:offerId
+// ============================================================
+
+const renderBookingCheckout =
+    async (req, res) => {
+        try {
+            const {
+                offerId,
+            } = req.params;
+
+            if (!offerId) {
+                return res.status(400).send(
+                    'offerId is required'
+                );
+            }
+
+            const offer =
+                await BookingOffer.findById(
+                    offerId
+                );
+
+            if (!offer) {
+                return res.status(404).send(
+                    'Offer not found'
+                );
+            }
+
+            if (
+                offer.provider.toString() !==
+                req.user.id.toString()
+            ) {
+                return res.status(403).send(
+                    'You are not authorized for this offer'
+                );
+            }
+
+            if (
+                offer.status !==
+                'USER_ACCEPTED'
+            ) {
+                return res.status(400).send(
+                    'This offer is not waiting for provider approval'
+                );
+            }
+
+            const booking =
+                await Booking.findById(
+                    offer.booking
+                );
+
+            if (!booking) {
+                return res.status(404).send(
+                    'Booking not found'
+                );
+            }
+
+            const provider =
+                await User.findById(
+                    req.user.id
+                ).select(
+                    'firstName lastName email mobile'
+                );
+
+            if (!provider) {
+                return res.status(404).send(
+                    'Provider not found'
+                );
+            }
+
+            if (
+                Number(
+                    provider.bookingCredits || 0
+                ) > 0
+            ) {
+                return res.status(400).send(
+                    'You have free booking credits. Payment is not required.'
+                );
+            }
+
+            if (
+                offer.distanceKm === null ||
+                offer.distanceKm === undefined
+            ) {
+                return res.status(400).send(
+                    'Booking distance is not available'
+                );
+            }
+
+            const accessFee =
+                getBookingAccessFee({
+                    distanceKm:
+                        offer.distanceKm,
+                });
+
+            let payment =
+                await BookingPayment.findOne({
+                    offer:
+                        offer._id,
+
+                    provider:
+                        req.user.id,
+
+                    status: {
+                        $in: [
+                            'CREATED',
+                            'PENDING',
+                        ],
+                    },
+                });
+
+            // Create order automatically if needed
+            if (!payment) {
+
+                const receipt =
+                    `booking_${String(
+                        booking._id
+                    ).slice(-12)}_${Date.now()}`;
+
+                const razorpayOrder =
+                    await createRazorpayOrder({
+                        amount:
+                            accessFee,
+
+                        currency:
+                            'INR',
+
+                        receipt,
+
+                        notes: {
+                            bookingId:
+                                String(
+                                    booking._id
+                                ),
+
+                            offerId:
+                                String(
+                                    offer._id
+                                ),
+
+                            providerId:
+                                String(
+                                    req.user.id
+                                ),
+
+                            type:
+                                'BOOKING_ACCESS_FEE',
+                        },
+                    });
+
+                payment =
+                    await BookingPayment.create({
+                        booking:
+                            booking._id,
+
+                        offer:
+                            offer._id,
+
+                        provider:
+                            req.user.id,
+
+                        amount:
+                            accessFee,
+
+                        currency:
+                            'INR',
+
+                        razorpayOrderId:
+                            razorpayOrder.id,
+
+                        status:
+                            'CREATED',
+
+                        description:
+                            'Provider job access fee',
+                    });
+
+                offer.accessType =
+                    'PAID';
+
+                offer.accessFee =
+                    accessFee;
+
+                offer.paymentStatus =
+                    'PENDING';
+
+                await offer.save();
+            }
+
+            return res.render(
+                'payment/checkout',
+                {
+                    razorpayKeyId:
+                        process.env
+                            .RAZORPAY_KEY_ID,
+
+                    razorpayOrderId:
+                        payment.razorpayOrderId,
+
+                    amount:
+                        payment.amount,
+
+                    amountInPaise:
+                        Math.round(
+                            Number(
+                                payment.amount
+                            ) * 100
+                        ),
+
+                    currency:
+                        payment.currency,
+
+                    bookingId:
+                        booking._id.toString(),
+
+                    offerId:
+                        offer._id.toString(),
+
+                    distanceKm:
+                        offer.distanceKm,
+
+                    providerName:
+                        `${provider.firstName || ''} ${provider.lastName || ''}`.trim(),
+
+                    providerEmail:
+                        provider.email,
+
+                    providerMobile:
+                        provider.mobile,
+                }
+            );
+
+        } catch (error) {
+
+            console.error(
+                'Render Booking Checkout Error:',
+                error
+            );
+
+            return res.status(500).send(
+                'Unable to load payment page'
+            );
+        }
+    };
 // ============================================================
 // CALCULATE BOOKING ACCESS FEE
 // ============================================================
@@ -1641,10 +1889,8 @@ const getBookingPaymentStatus =
 
 module.exports = {
     createBookingPaymentOrder,
-
     verifyBookingPayment,
-
     razorpayWebhook,
-
     getBookingPaymentStatus,
+    renderBookingCheckout,
 };
