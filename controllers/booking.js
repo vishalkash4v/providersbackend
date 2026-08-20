@@ -942,7 +942,7 @@ module.exports = {
             return res.status(201).json({
                 success: true,
                 message:
-                    'Booking created successfully',
+                    'Your request has been sent to nearby service providers. You can track the status in My Bookings.',
             });
 
         } catch (error) {
@@ -1426,7 +1426,7 @@ module.exports = {
             return res.status(200).json({
                 success: true,
                 message:
-                    'Booking updated successfully',
+                    'Your request has been updated and sent to nearby service providers. You can track the status in My Bookings.',
             });
 
         } catch (error) {
