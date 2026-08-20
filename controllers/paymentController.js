@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 const Booking = require('../models/Booking');
 const BookingOffer = require('../models/BookingOffer');
 const BookingPayment = require('../models/BookingPayment');
@@ -15,6 +17,26 @@ const {
 const {
     addBookingCredits,
 } = require('../utils/bookingCredits');
+
+
+// ============================================================
+// PAYMENT MODE
+// ============================================================
+//
+// PAYMENT_MODE=false
+// -> Dummy payment
+// -> No Razorpay call
+//
+// PAYMENT_MODE=true
+// -> Real Razorpay payment
+//
+// Default is false for safety while testing.
+// ============================================================
+
+const isRealPaymentMode =
+    String(
+        process.env.PAYMENT_MODE || 'false'
+    ).toLowerCase() === 'true';
 
 
 // ============================================================
@@ -68,7 +90,610 @@ const getBookingAccessFee = ({
 
 
 // ============================================================
-// EJS PAYMENT CHECKOUT PAGE
+// COMPLETE REFERRAL
+// ============================================================
+//
+// Referral becomes SUCCESS after referred provider
+// gets their first successfully assigned booking.
+// ============================================================
+
+const completeReferralIfRequired = async ({
+    providerId,
+    bookingId,
+}) => {
+    const referral =
+        await Referral.findOne({
+            referredProvider:
+                providerId,
+
+            status:
+                'PENDING',
+        });
+
+    if (!referral) {
+        return null;
+    }
+
+    const rewardCredits =
+        Number(
+            process.env
+                .PROVIDER_FREE_BOOKINGS_PER_REFERRAL ||
+            0
+        );
+
+    if (rewardCredits > 0) {
+        await addBookingCredits({
+            providerId:
+                referral.referrer,
+
+            amount:
+                rewardCredits,
+
+            type:
+                'REFERRAL_REWARD',
+
+            referral:
+                referral._id,
+
+            booking:
+                bookingId,
+
+            description:
+                'Referral reward for referred provider first approved job',
+        });
+    }
+
+    referral.status =
+        'SUCCESS';
+
+    referral.firstBooking =
+        bookingId;
+
+    referral.successfulAt =
+        new Date();
+
+    referral.rewardCredits =
+        rewardCredits;
+
+    await referral.save();
+
+    return referral;
+};
+
+
+// ============================================================
+// REJECT OTHER OFFERS
+// ============================================================
+
+const rejectOtherOffers = async ({
+    bookingId,
+    winningOfferId,
+}) => {
+    await BookingOffer.updateMany(
+        {
+            booking:
+                bookingId,
+
+            _id: {
+                $ne:
+                    winningOfferId,
+            },
+
+            status: {
+                $in: [
+                    'PENDING',
+                    'USER_ACCEPTED',
+                ],
+            },
+        },
+        {
+            $set: {
+                status:
+                    'REJECTED',
+            },
+        }
+    );
+};
+
+
+// ============================================================
+// REFUND LOSING RAZORPAY PAYMENT
+// ============================================================
+//
+// Used only when PAYMENT_MODE=true.
+// ============================================================
+
+const refundLosingPayment = async ({
+    payment,
+}) => {
+    if (
+        !isRealPaymentMode ||
+        !payment ||
+        !payment.razorpayPaymentId
+    ) {
+        return null;
+    }
+
+    if (
+        payment.status ===
+        'REFUNDED'
+    ) {
+        return null;
+    }
+
+    try {
+        const refund =
+            await razorpay.payments.refund(
+                payment.razorpayPaymentId,
+                {
+                    amount:
+                        Math.round(
+                            Number(
+                                payment.amount
+                            ) * 100
+                        ),
+
+                    notes: {
+                        reason:
+                            'Another provider won the booking',
+
+                        bookingId:
+                            String(
+                                payment.booking
+                            ),
+
+                        offerId:
+                            String(
+                                payment.offer
+                            ),
+                    },
+                }
+            );
+
+        payment.status =
+            'REFUNDED';
+
+        payment.failureReason =
+            'Another provider won the booking. Payment refunded.';
+
+        await payment.save();
+
+        return refund;
+
+    } catch (error) {
+        console.error(
+            'Refund Losing Payment Error:',
+            error
+        );
+
+        return null;
+    }
+};
+
+
+// ============================================================
+// FINALIZE BOOKING
+// ============================================================
+//
+// This is the main common function used by:
+//
+// 1. Dummy payment
+// 2. Real Razorpay payment
+//
+// First provider who successfully claims the booking wins.
+// ============================================================
+
+const finalizeBookingPayment = async ({
+    payment,
+}) => {
+    if (!payment) {
+        return {
+            success:
+                false,
+
+            message:
+                'Payment record not found',
+        };
+    }
+
+    const offer =
+        await BookingOffer.findById(
+            payment.offer
+        );
+
+    if (!offer) {
+        return {
+            success:
+                false,
+
+            message:
+                'Booking offer not found',
+        };
+    }
+
+    const booking =
+        await Booking.findById(
+            payment.booking
+        );
+
+    if (!booking) {
+        return {
+            success:
+                false,
+
+            message:
+                'Booking not found',
+        };
+    }
+
+    // ========================================================
+    // ALREADY FINALIZED
+    // ========================================================
+
+    if (
+        offer.status ===
+            'PROVIDER_APPROVED' &&
+        booking.provider &&
+        booking.provider.toString() ===
+            payment.provider.toString()
+    ) {
+        payment.status =
+            'PAID';
+
+        if (!payment.paidAt) {
+            payment.paidAt =
+                new Date();
+        }
+
+        await payment.save();
+
+        return {
+            success:
+                true,
+
+            alreadyFinalized:
+                true,
+
+            booking:
+                booking,
+
+            offer:
+                offer,
+
+            payment:
+                payment,
+        };
+    }
+
+    // ========================================================
+    // SOMEONE ELSE ALREADY WON
+    // ========================================================
+
+    if (
+        booking.provider &&
+        booking.provider.toString() !==
+            payment.provider.toString()
+    ) {
+        offer.status =
+            'REJECTED';
+
+        offer.paymentStatus =
+            'PAID';
+
+        await offer.save();
+
+        await refundLosingPayment({
+            payment,
+        });
+
+        return {
+            success:
+                false,
+
+            bookingAlreadyAssigned:
+                true,
+
+            message:
+                'Another provider has already been assigned this booking.',
+        };
+    }
+
+    // ========================================================
+    // OFFER MUST BE USER ACCEPTED
+    // ========================================================
+
+    if (
+        offer.status !==
+        'USER_ACCEPTED'
+    ) {
+        return {
+            success:
+                false,
+
+            message:
+                'This offer is no longer waiting for provider approval',
+        };
+    }
+
+    // ========================================================
+    // ATOMIC BOOKING CLAIM
+    // ========================================================
+    //
+    // First provider to successfully execute this update wins.
+    // ========================================================
+
+    const claimedBooking =
+        await Booking.findOneAndUpdate(
+            {
+                _id:
+                    booking._id,
+
+                status:
+                    'PENDING',
+
+                isActive:
+                    true,
+
+                provider:
+                    null,
+            },
+            {
+                $set: {
+                    provider:
+                        payment.provider,
+
+                    status:
+                        'PROVIDER_ACCEPTED',
+
+                    providerAcceptedAt:
+                        new Date(),
+                },
+            },
+            {
+                new:
+                    true,
+            }
+        );
+
+    // ========================================================
+    // THIS PROVIDER LOST
+    // ========================================================
+
+    if (!claimedBooking) {
+        offer.status =
+            'REJECTED';
+
+        offer.paymentStatus =
+            'PAID';
+
+        await offer.save();
+
+        await refundLosingPayment({
+            payment,
+        });
+
+        return {
+            success:
+                false,
+
+            bookingAlreadyAssigned:
+                true,
+
+            message:
+                'Another provider has already been assigned this booking.',
+        };
+    }
+
+    // ========================================================
+    // PAYMENT SUCCESS
+    // ========================================================
+
+    payment.status =
+        'PAID';
+
+    payment.paidAt =
+        payment.paidAt ||
+        new Date();
+
+    await payment.save();
+
+    // ========================================================
+    // UPDATE OFFER
+    // ========================================================
+
+    offer.accessType =
+        'PAID';
+
+    offer.paymentStatus =
+        'PAID';
+
+    offer.providerApprovedAt =
+        new Date();
+
+    offer.status =
+        'PROVIDER_APPROVED';
+
+    offer.paymentId =
+        payment.razorpayPaymentId ||
+        null;
+
+    offer.paymentPaidAt =
+        payment.paidAt;
+
+    await offer.save();
+
+    // ========================================================
+    // COMPLETE REFERRAL
+    // ========================================================
+
+    await completeReferralIfRequired({
+        providerId:
+            payment.provider,
+
+        bookingId:
+            claimedBooking._id,
+    });
+
+    // ========================================================
+    // REJECT OTHER OFFERS
+    // ========================================================
+
+    await rejectOtherOffers({
+        bookingId:
+            claimedBooking._id,
+
+        winningOfferId:
+            offer._id,
+    });
+
+    return {
+        success:
+            true,
+
+        booking:
+            claimedBooking,
+
+        offer:
+            offer,
+
+        payment:
+            payment,
+    };
+};
+
+
+// ============================================================
+// CREATE DUMMY PAYMENT
+// ============================================================
+//
+// Used when:
+//
+// PAYMENT_MODE=false
+//
+// No Razorpay API call.
+// Payment is directly marked PAID.
+// ============================================================
+
+const createDummyPayment = async ({
+    booking,
+    offer,
+    provider,
+    accessFee,
+}) => {
+
+    // ========================================================
+    // CHECK EXISTING DUMMY/PAID PAYMENT
+    // ========================================================
+
+    const existingPayment =
+        await BookingPayment.findOne({
+            offer:
+                offer._id,
+
+            provider:
+                provider._id,
+
+            status:
+                'PAID',
+        });
+
+    if (existingPayment) {
+        return existingPayment;
+    }
+
+    // ========================================================
+    // UNIQUE DUMMY IDS
+    // ========================================================
+
+    const dummyOrderId =
+        `dummy_order_${Date.now()}_${crypto
+            .randomBytes(6)
+            .toString('hex')}`;
+
+    const dummyPaymentId =
+        `dummy_payment_${Date.now()}_${crypto
+            .randomBytes(6)
+            .toString('hex')}`;
+
+    // ========================================================
+    // CREATE PAYMENT RECORD
+    // ========================================================
+
+    const payment =
+        await BookingPayment.create({
+            booking:
+                booking._id,
+
+            offer:
+                offer._id,
+
+            provider:
+                provider._id,
+
+            amount:
+                accessFee,
+
+            currency:
+                'INR',
+
+            razorpayOrderId:
+                dummyOrderId,
+
+            razorpayPaymentId:
+                dummyPaymentId,
+
+            status:
+                'PAID',
+
+            webhookVerified:
+                false,
+
+            webhookEvent:
+                'DUMMY_PAYMENT',
+
+            paidAt:
+                new Date(),
+
+            description:
+                'Dummy payment for development/testing',
+        });
+
+    // ========================================================
+    // UPDATE OFFER
+    // ========================================================
+
+    offer.accessType =
+        'PAID';
+
+    offer.accessFee =
+        accessFee;
+
+    offer.paymentStatus =
+        'PAID';
+
+    offer.paymentId =
+        dummyPaymentId;
+
+    offer.paymentPaidAt =
+        payment.paidAt;
+
+    await offer.save();
+
+    return payment;
+};
+
+
+// ============================================================
+// RENDER / OPEN PAYMENT CHECKOUT PAGE
+// ============================================================
+//
+// When PAYMENT_MODE=false:
+//
+// Directly completes dummy payment and returns JSON.
+//
+// When PAYMENT_MODE=true:
+//
+// Renders Razorpay EJS page.
 // ============================================================
 
 const renderBookingCheckout =
@@ -164,8 +789,10 @@ const renderBookingCheckout =
             }
 
             if (
-                offer.distanceKm === null ||
-                offer.distanceKm === undefined
+                offer.distanceKm ===
+                    null ||
+                offer.distanceKm ===
+                    undefined
             ) {
                 return res.status(400).send(
                     'Booking distance is not available'
@@ -177,6 +804,75 @@ const renderBookingCheckout =
                     distanceKm:
                         offer.distanceKm,
                 });
+
+            // ====================================================
+            // DUMMY PAYMENT MODE
+            // ====================================================
+
+            if (!isRealPaymentMode) {
+
+                const payment =
+                    await createDummyPayment({
+                        booking,
+                        offer,
+                        provider,
+                        accessFee,
+                    });
+
+                const result =
+                    await finalizeBookingPayment({
+                        payment,
+                    });
+
+                if (
+                    !result.success
+                ) {
+                    return res.status(409).json({
+                        success:
+                            false,
+
+                        message:
+                            result.message,
+
+                        code:
+                            result.bookingAlreadyAssigned
+                                ? 'BOOKING_ALREADY_ASSIGNED'
+                                : 'DUMMY_PAYMENT_FINALIZATION_FAILED',
+                    });
+                }
+
+                return res.status(200).json({
+                    success:
+                        true,
+
+                    message:
+                        'Dummy payment successful and booking approved',
+
+                    paymentMode:
+                        'DUMMY',
+
+                    data: {
+                        paymentId:
+                            payment._id,
+
+                        dummyPaymentId:
+                            payment.razorpayPaymentId,
+
+                        booking:
+                            result.booking,
+
+                        offer:
+                            result.offer,
+
+                        amount:
+                            accessFee,
+                    },
+                });
+            }
+
+            // ====================================================
+            // REAL RAZORPAY MODE
+            // ====================================================
 
             let payment =
                 await BookingPayment.findOne({
@@ -195,6 +891,7 @@ const renderBookingCheckout =
                 });
 
             if (!payment) {
+
                 const receipt =
                     `booking_${String(
                         booking._id
@@ -319,460 +1016,29 @@ const renderBookingCheckout =
                 error
             );
 
-            return res.status(500).send(
-                'Unable to load payment page'
-            );
+            return res.status(500).json({
+                success:
+                    false,
+
+                message:
+                    'Unable to process payment',
+
+                error:
+                    error.message,
+            });
         }
     };
-
-
-// ============================================================
-// REFERRAL SUCCESS
-// ============================================================
-
-const completeReferralIfRequired = async ({
-    providerId,
-    bookingId,
-}) => {
-    const referral =
-        await Referral.findOne({
-            referredProvider:
-                providerId,
-
-            status:
-                'PENDING',
-        });
-
-    if (!referral) {
-        return null;
-    }
-
-    const rewardCredits =
-        Number(
-            process.env
-                .PROVIDER_FREE_BOOKINGS_PER_REFERRAL ||
-            0
-        );
-
-    if (rewardCredits > 0) {
-        await addBookingCredits({
-            providerId:
-                referral.referrer,
-
-            amount:
-                rewardCredits,
-
-            type:
-                'REFERRAL_REWARD',
-
-            referral:
-                referral._id,
-
-            booking:
-                bookingId,
-
-            description:
-                'Referral reward for referred provider first approved job',
-        });
-    }
-
-    referral.status =
-        'SUCCESS';
-
-    referral.firstBooking =
-        bookingId;
-
-    referral.successfulAt =
-        new Date();
-
-    referral.rewardCredits =
-        rewardCredits;
-
-    await referral.save();
-
-    return referral;
-};
-
-
-// ============================================================
-// REJECT OTHER OFFERS
-// ============================================================
-
-const rejectOtherOffers = async ({
-    bookingId,
-    winningOfferId,
-}) => {
-    await BookingOffer.updateMany(
-        {
-            booking:
-                bookingId,
-
-            _id: {
-                $ne:
-                    winningOfferId,
-            },
-
-            status: {
-                $in: [
-                    'PENDING',
-                    'USER_ACCEPTED',
-                ],
-            },
-        },
-        {
-            $set: {
-                status:
-                    'REJECTED',
-            },
-        }
-    );
-};
-
-
-// ============================================================
-// REFUND LOSING PAYMENT
-// ============================================================
-
-const refundLosingPayment = async ({
-    payment,
-}) => {
-    if (
-        !payment ||
-        !payment.razorpayPaymentId
-    ) {
-        return null;
-    }
-
-    if (
-        payment.status ===
-        'REFUNDED'
-    ) {
-        return null;
-    }
-
-    try {
-        const refund =
-            await razorpay.payments.refund(
-                payment.razorpayPaymentId,
-                {
-                    amount:
-                        Math.round(
-                            Number(
-                                payment.amount
-                            ) * 100
-                        ),
-
-                    notes: {
-                        reason:
-                            'Another provider won the booking',
-
-                        bookingId:
-                            String(
-                                payment.booking
-                            ),
-
-                        offerId:
-                            String(
-                                payment.offer
-                            ),
-                    },
-                }
-            );
-
-        payment.status =
-            'REFUNDED';
-
-        payment.failureReason =
-            'Another provider won the booking. Payment refunded.';
-
-        await payment.save();
-
-        return refund;
-
-    } catch (error) {
-        console.error(
-            'Refund Losing Payment Error:',
-            error
-        );
-
-        return null;
-    }
-};
-
-
-// ============================================================
-// FINALIZE PAID BOOKING
-// ============================================================
-
-const finalizePaidBooking = async ({
-    payment,
-}) => {
-    if (!payment) {
-        return {
-            success: false,
-            message:
-                'Payment record not found',
-        };
-    }
-
-    const offer =
-        await BookingOffer.findById(
-            payment.offer
-        );
-
-    if (!offer) {
-        return {
-            success: false,
-            message:
-                'Booking offer not found',
-        };
-    }
-
-    const booking =
-        await Booking.findById(
-            payment.booking
-        );
-
-    if (!booking) {
-        return {
-            success: false,
-            message:
-                'Booking not found',
-        };
-    }
-
-    // ========================================================
-    // ALREADY FINALIZED
-    // ========================================================
-
-    if (
-        offer.status ===
-            'PROVIDER_APPROVED' &&
-        booking.provider &&
-        booking.provider.toString() ===
-            payment.provider.toString()
-    ) {
-        payment.status =
-            'PAID';
-
-        if (!payment.paidAt) {
-            payment.paidAt =
-                new Date();
-        }
-
-        await payment.save();
-
-        return {
-            success:
-                true,
-
-            alreadyFinalized:
-                true,
-
-            booking:
-                booking,
-
-            offer:
-                offer,
-
-            payment:
-                payment,
-        };
-    }
-
-    // ========================================================
-    // BOOKING ALREADY WON BY ANOTHER PROVIDER
-    // ========================================================
-
-    if (
-        booking.provider &&
-        booking.provider.toString() !==
-            payment.provider.toString()
-    ) {
-        offer.status =
-            'REJECTED';
-
-        offer.paymentStatus =
-            'PAID';
-
-        await offer.save();
-
-        await refundLosingPayment({
-            payment,
-        });
-
-        return {
-            success:
-                false,
-
-            bookingAlreadyAssigned:
-                true,
-
-            message:
-                'Another provider has already been assigned this booking. Payment refund initiated.',
-        };
-    }
-
-    // ========================================================
-    // OFFER MUST BE USER ACCEPTED
-    // ========================================================
-
-    if (
-        offer.status !==
-        'USER_ACCEPTED'
-    ) {
-        return {
-            success:
-                false,
-
-            message:
-                'This offer is no longer waiting for provider approval',
-        };
-    }
-
-    // ========================================================
-    // ATOMIC BOOKING CLAIM
-    // ========================================================
-
-    const claimedBooking =
-        await Booking.findOneAndUpdate(
-            {
-                _id:
-                    booking._id,
-
-                status:
-                    'PENDING',
-
-                isActive:
-                    true,
-
-                provider:
-                    null,
-            },
-            {
-                $set: {
-                    provider:
-                        payment.provider,
-
-                    status:
-                        'PROVIDER_ACCEPTED',
-
-                    providerAcceptedAt:
-                        new Date(),
-                },
-            },
-            {
-                new:
-                    true,
-            }
-        );
-
-    // ========================================================
-    // PROVIDER LOST THE RACE
-    // ========================================================
-
-    if (!claimedBooking) {
-        offer.status =
-            'REJECTED';
-
-        offer.paymentStatus =
-            'PAID';
-
-        await offer.save();
-
-        await refundLosingPayment({
-            payment,
-        });
-
-        return {
-            success:
-                false,
-
-            bookingAlreadyAssigned:
-                true,
-
-            message:
-                'Another provider has already been assigned this booking. Payment refund initiated.',
-        };
-    }
-
-    // ========================================================
-    // PAYMENT SUCCESS
-    // ========================================================
-
-    payment.status =
-        'PAID';
-
-    payment.paidAt =
-        payment.paidAt ||
-        new Date();
-
-    await payment.save();
-
-    // ========================================================
-    // UPDATE OFFER
-    // ========================================================
-
-    offer.accessType =
-        'PAID';
-
-    offer.paymentStatus =
-        'PAID';
-
-    offer.providerApprovedAt =
-        new Date();
-
-    offer.status =
-        'PROVIDER_APPROVED';
-
-    offer.paymentId =
-        payment.razorpayPaymentId ||
-        null;
-
-    await offer.save();
-
-    // ========================================================
-    // REFERRAL
-    // ========================================================
-
-    await completeReferralIfRequired({
-        providerId:
-            payment.provider,
-
-        bookingId:
-            claimedBooking._id,
-    });
-
-    // ========================================================
-    // REJECT OTHER OFFERS
-    // ========================================================
-
-    await rejectOtherOffers({
-        bookingId:
-            claimedBooking._id,
-
-        winningOfferId:
-            offer._id,
-    });
-
-    return {
-        success:
-            true,
-
-        booking:
-            claimedBooking,
-
-        offer:
-            offer,
-
-        payment:
-            payment,
-    };
-};
 
 
 // ============================================================
 // CREATE BOOKING PAYMENT ORDER
+// ============================================================
+//
+// PAYMENT_MODE=false
+// -> Dummy payment is created immediately.
+//
+// PAYMENT_MODE=true
+// -> Razorpay order is created.
 // ============================================================
 
 const createBookingPaymentOrder =
@@ -792,6 +1058,10 @@ const createBookingPaymentOrder =
                 });
             }
 
+            // ====================================================
+            // FIND OFFER
+            // ====================================================
+
             const offer =
                 await BookingOffer.findById(
                     offerId
@@ -807,9 +1077,14 @@ const createBookingPaymentOrder =
                 });
             }
 
+            // ====================================================
+            // PROVIDER AUTHORIZATION
+            // ====================================================
+
             if (
+                !offer.provider ||
                 offer.provider.toString() !==
-                req.user.id.toString()
+                    req.user.id.toString()
             ) {
                 return res.status(403).json({
                     success:
@@ -819,6 +1094,10 @@ const createBookingPaymentOrder =
                         'You are not authorized for this offer',
                 });
             }
+
+            // ====================================================
+            // OFFER STATUS
+            // ====================================================
 
             if (
                 offer.status !==
@@ -832,6 +1111,10 @@ const createBookingPaymentOrder =
                         'This offer is not waiting for provider approval',
                 });
             }
+
+            // ====================================================
+            // APPROVAL WINDOW
+            // ====================================================
 
             if (
                 offer.providerApprovalExpiresAt &&
@@ -851,6 +1134,10 @@ const createBookingPaymentOrder =
                         'Provider approval window has expired',
                 });
             }
+
+            // ====================================================
+            // BOOKING
+            // ====================================================
 
             const booking =
                 await Booking.findById(
@@ -881,6 +1168,10 @@ const createBookingPaymentOrder =
                 });
             }
 
+            // ====================================================
+            // PROVIDER
+            // ====================================================
+
             const provider =
                 await User.findById(
                     req.user.id
@@ -895,6 +1186,10 @@ const createBookingPaymentOrder =
                         'Provider not found',
                 });
             }
+
+            // ====================================================
+            // FREE CREDIT EXISTS
+            // ====================================================
 
             if (
                 Number(
@@ -920,6 +1215,10 @@ const createBookingPaymentOrder =
                 });
             }
 
+            // ====================================================
+            // DISTANCE
+            // ====================================================
+
             if (
                 offer.distanceKm ===
                     null ||
@@ -935,11 +1234,101 @@ const createBookingPaymentOrder =
                 });
             }
 
+            // ====================================================
+            // ACCESS FEE
+            // ====================================================
+
             const accessFee =
                 getBookingAccessFee({
                     distanceKm:
                         offer.distanceKm,
                 });
+
+            // ====================================================
+            // DUMMY PAYMENT MODE
+            // ====================================================
+
+            if (!isRealPaymentMode) {
+
+                const payment =
+                    await createDummyPayment({
+                        booking,
+                        offer,
+                        provider,
+                        accessFee,
+                    });
+
+                const result =
+                    await finalizeBookingPayment({
+                        payment,
+                    });
+
+                if (
+                    !result.success
+                ) {
+                    return res.status(409).json({
+                        success:
+                            false,
+
+                        message:
+                            result.message,
+
+                        code:
+                            result.bookingAlreadyAssigned
+                                ? 'BOOKING_ALREADY_ASSIGNED'
+                                : 'DUMMY_PAYMENT_FINALIZATION_FAILED',
+
+                        data: {
+                            paymentId:
+                                payment._id,
+                        },
+                    });
+                }
+
+                return res.status(200).json({
+                    success:
+                        true,
+
+                    message:
+                        'Dummy payment successful and booking approved',
+
+                    paymentMode:
+                        'DUMMY',
+
+                    data: {
+                        paymentId:
+                            payment._id,
+
+                        dummyOrderId:
+                            payment.razorpayOrderId,
+
+                        dummyPaymentId:
+                            payment.razorpayPaymentId,
+
+                        bookingId:
+                            booking._id,
+
+                        offerId:
+                            offer._id,
+
+                        amount:
+                            accessFee,
+
+                        currency:
+                            'INR',
+
+                        booking:
+                            result.booking,
+
+                        offer:
+                            result.offer,
+                    },
+                });
+            }
+
+            // ====================================================
+            // REAL RAZORPAY MODE
+            // ====================================================
 
             const existingPayment =
                 await BookingPayment.findOne({
@@ -964,6 +1353,9 @@ const createBookingPaymentOrder =
 
                     message:
                         'Existing payment order found',
+
+                    paymentMode:
+                        'RAZORPAY',
 
                     data: {
                         paymentId:
@@ -999,6 +1391,10 @@ const createBookingPaymentOrder =
                     },
                 });
             }
+
+            // ====================================================
+            // CREATE RAZORPAY ORDER
+            // ====================================================
 
             const receipt =
                 `booking_${String(
@@ -1081,6 +1477,9 @@ const createBookingPaymentOrder =
                 message:
                     'Payment order created successfully',
 
+                paymentMode:
+                    'RAZORPAY',
+
                 data: {
                     paymentId:
                         payment._id,
@@ -1147,12 +1546,32 @@ const createBookingPaymentOrder =
 
 
 // ============================================================
-// VERIFY CHECKOUT PAYMENT
+// VERIFY RAZORPAY PAYMENT
+// ============================================================
+//
+// In DUMMY mode this endpoint is not required because
+// payment is already completed by create-order.
+//
+// In REAL mode this verifies Razorpay payment.
 // ============================================================
 
 const verifyBookingPayment =
     async (req, res) => {
         try {
+
+            if (!isRealPaymentMode) {
+                return res.status(400).json({
+                    success:
+                        false,
+
+                    message:
+                        'Payment verification is disabled in dummy payment mode',
+
+                    paymentMode:
+                        'DUMMY',
+                });
+            }
+
             const {
                 offerId,
                 razorpayOrderId,
@@ -1251,10 +1670,6 @@ const verifyBookingPayment =
 
             await payment.save();
 
-            // ====================================================
-            // FETCH PAYMENT
-            // ====================================================
-
             let razorpayPayment;
 
             try {
@@ -1285,17 +1700,14 @@ const verifyBookingPayment =
                 });
             }
 
-            // ====================================================
-            // CAPTURED
-            // ====================================================
-
             if (
                 razorpayPayment &&
                 razorpayPayment.status ===
                     'captured'
             ) {
+
                 const result =
-                    await finalizePaidBooking({
+                    await finalizeBookingPayment({
                         payment:
                             payment,
                     });
@@ -1309,6 +1721,9 @@ const verifyBookingPayment =
 
                         message:
                             'Payment verified and booking approved successfully',
+
+                        paymentMode:
+                            'RAZORPAY',
 
                         data: {
                             payment:
@@ -1349,6 +1764,9 @@ const verifyBookingPayment =
                 message:
                     'Payment signature verified. Waiting for capture.',
 
+                paymentMode:
+                    'RAZORPAY',
+
                 data: {
                     paymentId:
                         payment._id,
@@ -1385,23 +1803,26 @@ const verifyBookingPayment =
 // RAZORPAY WEBHOOK
 // ============================================================
 //
-// IMPORTANT:
-//
-// Keep this handler FAST.
-//
-// Do NOT:
-// - finalize booking
-// - reject other offers
-// - process referral
-// - call refund API
-//
-// Those operations are handled by verifyBookingPayment().
-//
-// Webhook only records the payment event and returns 200.
+// Only used when PAYMENT_MODE=true.
+// Dummy mode does not use webhooks.
 // ============================================================
 
 const razorpayWebhook =
     async (req, res) => {
+
+        if (!isRealPaymentMode) {
+            return res.status(200).json({
+                success:
+                    true,
+
+                message:
+                    'Webhook disabled because PAYMENT_MODE=false',
+
+                paymentMode:
+                    'DUMMY',
+            });
+        }
+
         try {
             const signature =
                 req.headers[
@@ -1417,10 +1838,6 @@ const razorpayWebhook =
                         'Missing Razorpay webhook signature',
                 });
             }
-
-            // ====================================================
-            // VERIFY SIGNATURE
-            // ====================================================
 
             const isValid =
                 verifyWebhookSignature({
@@ -1440,10 +1857,6 @@ const razorpayWebhook =
                         'Invalid Razorpay webhook signature',
                 });
             }
-
-            // ====================================================
-            // PARSE BODY
-            // ====================================================
 
             let eventBody;
 
@@ -1474,7 +1887,7 @@ const razorpayWebhook =
                 null;
 
             // ====================================================
-            // PAYMENT CAPTURED / ORDER PAID
+            // PAYMENT CAPTURED
             // ====================================================
 
             if (
@@ -1553,10 +1966,6 @@ const razorpayWebhook =
                     });
                 }
 
-                // ==================================================
-                // SAVE PAYMENT INFORMATION ONLY
-                // ==================================================
-
                 payment.razorpayPaymentId =
                     paymentId ||
                     payment.razorpayPaymentId;
@@ -1578,10 +1987,6 @@ const razorpayWebhook =
 
                 await payment.save();
 
-                // ==================================================
-                // UPDATE OFFER ONLY
-                // ==================================================
-
                 await BookingOffer.findByIdAndUpdate(
                     payment.offer,
                     {
@@ -1598,10 +2003,6 @@ const razorpayWebhook =
                         },
                     }
                 );
-
-                // ==================================================
-                // RETURN IMMEDIATELY
-                // ==================================================
 
                 return res.status(200).json({
                     success:
@@ -1705,10 +2106,6 @@ const razorpayWebhook =
                 });
             }
 
-            // ====================================================
-            // OTHER EVENTS
-            // ====================================================
-
             return res.status(200).json({
                 success:
                     true,
@@ -1723,9 +2120,6 @@ const razorpayWebhook =
                 error
             );
 
-            // IMPORTANT:
-            // For webhook reliability, do not leave Razorpay
-            // waiting on long processing.
             return res.status(200).json({
                 success:
                     true,
@@ -1773,6 +2167,11 @@ const getBookingPaymentStatus =
             return res.status(200).json({
                 success:
                     true,
+
+                paymentMode:
+                    isRealPaymentMode
+                        ? 'RAZORPAY'
+                        : 'DUMMY',
 
                 data: {
                     paymentId:

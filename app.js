@@ -16,6 +16,7 @@ const providersRouter = require('./routes/providers');
 const authRouter = require('./routes/auth');
 const bookingRouter = require('./routes/booking');
 const paymentRouter = require('./routes/payment');
+const extrasRouter = require('./routes/extras');
 
 const { connectDB } = require('./utils/db');
 
@@ -185,6 +186,10 @@ app.use(
 app.use(
   '/api/payment',
   paymentRouter
+);
+app.use(
+  '/api/extras',
+  extrasRouter
 );
 
 

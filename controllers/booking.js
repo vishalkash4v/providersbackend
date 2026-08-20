@@ -10,8 +10,7 @@ const BookingOffer = require('../models/BookingOffer');
 const { validate } =
     require('../utils/fieldValidations');
 
-const { uploadFiles } =
-    require('../utils/r2uploads');
+
 
 const { calculateDistance } =
     require('../utils/distance');
@@ -23,6 +22,83 @@ const {
     useBookingCredit,
     addBookingCredits,
 } = require('../utils/bookingCredits');
+
+
+// ============================================================
+// NORMALIZE IMAGE PATHS
+// ============================================================
+//
+// Accepts:
+//
+// images: ["a.jpg", "b.jpg"]
+//
+// OR form-data:
+//
+// images: '["a.jpg","b.jpg"]'
+//
+// OR single string:
+//
+// images: "a.jpg"
+//
+// Always returns an array.
+// ============================================================
+
+const normalizeImagePaths = (images) => {
+    if (
+        images === undefined ||
+        images === null ||
+        images === ''
+    ) {
+        return [];
+    }
+
+    let normalized =
+        images;
+
+    // Form-data may send JSON string
+    if (typeof normalized === 'string') {
+        const value =
+            normalized.trim();
+
+        try {
+            if (
+                value.startsWith('[')
+            ) {
+                normalized =
+                    JSON.parse(value);
+            } else {
+                normalized = [
+                    value,
+                ];
+            }
+        } catch (error) {
+            normalized = [
+                value,
+            ];
+        }
+    }
+
+    if (!Array.isArray(normalized)) {
+        return [];
+    }
+
+    return [
+        ...new Set(
+            normalized
+                .filter(
+                    (image) =>
+                        typeof image ===
+                        'string' &&
+                        image.trim() !== ''
+                )
+                .map(
+                    (image) =>
+                        image.trim()
+                )
+        ),
+    ];
+};
+
 
 const notifyMatchingProviders = async (
     booking,
@@ -777,22 +853,14 @@ module.exports = {
             // WORK IMAGES
             // ========================================================
 
-            let workImages = [];
+            // ========================================================
+            // WORK IMAGES
+            // ========================================================
 
-            if (
-                req.files &&
-                Object.keys(req.files).length
-            ) {
-                const uploaded =
-                    await uploadFiles(
-                        req,
-                        'uploads/bookings'
-                    );
-
-                workImages = uploaded.map(
-                    (file) => file.path
+            const workImages =
+                normalizeImagePaths(
+                    req.body.images
                 );
-            }
 
             // ========================================================
             // CREATE BOOKING
@@ -871,25 +939,10 @@ module.exports = {
             // RESPONSE
             // ========================================================
 
-            const populatedBooking =
-                await Booking.findById(
-                    booking._id
-                )
-                    .populate(
-                        'service',
-                        'name image'
-                    )
-                    .populate(
-                        'user',
-                        'firstName lastName email mobile'
-                    );
-
             return res.status(201).json({
                 success: true,
                 message:
                     'Booking created successfully',
-                data:
-                    populatedBooking,
             });
 
         } catch (error) {
@@ -1331,28 +1384,24 @@ module.exports = {
             }
 
             // ========================================================
-            // NEW WORK IMAGES
+            // WORK IMAGES
+            // ========================================================
+            //
+            // If images is provided:
+            // replace existing booking images.
+            //
+            // If images is not provided:
+            // keep existing images unchanged.
             // ========================================================
 
             if (
-                req.files &&
-                Object.keys(req.files).length
+                req.body.images !==
+                undefined
             ) {
-                const uploaded =
-                    await uploadFiles(
-                        req,
-                        'uploads/bookings'
+                booking.workImages =
+                    normalizeImagePaths(
+                        req.body.images
                     );
-
-                const newImages = uploaded.map(
-                    (file) => file.path
-                );
-
-                booking.workImages = [
-                    ...(booking.workImages ||
-                        []),
-                    ...newImages,
-                ];
             }
 
             // ========================================================
@@ -1374,25 +1423,10 @@ module.exports = {
             // RESPONSE
             // ========================================================
 
-            const updatedBooking =
-                await Booking.findById(
-                    booking._id
-                )
-                    .populate(
-                        'service',
-                        'name image'
-                    )
-                    .populate(
-                        'user',
-                        'firstName lastName email mobile'
-                    );
-
             return res.status(200).json({
                 success: true,
                 message:
                     'Booking updated successfully',
-                data:
-                    updatedBooking,
             });
 
         } catch (error) {
