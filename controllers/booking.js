@@ -12,7 +12,6 @@ const { calculateDistance } = require('../utils/distance');
 const { notifyUser } = require('../utils/notification');
 const { useBookingCredit, addBookingCredits } = require('../utils/bookingCredits');
 
-
 // ============================================================
 // NORMALIZE IMAGE PATHS
 // ============================================================
@@ -44,15 +43,17 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
         console.log('🛎️  STARTING PROVIDER MATCHING PROCESS');
         console.log(`Booking ID: ${booking._id}`);
         
-        const service = await Service.findById(booking.service);
+        const serviceId = booking.service?._id ? booking.service._id : booking.service;
+        const service = await Service.findById(serviceId);
+        
         if (!service) {
-            console.log('❌ Service not found. Exiting.');
+            console.log('❌ Service not found in database. Exiting.');
             return;
         }
 
         // 0 = PENDING (Looking for providers)
         if (booking.status !== 0 || !booking.isActive || booking.deletedAt) {
-            console.log('❌ Booking is not active/pending. Exiting.');
+            console.log(`❌ Booking is not active/pending. (status: ${booking.status}, isActive: ${booking.isActive}, deletedAt: ${booking.deletedAt}). Exiting.`);
             return;
         }
 
@@ -63,60 +64,79 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
 
         const [bookingLng, bookingLat] = booking.location.coordinates;
         console.log(`📍 BOOKING LOCATION: [Lat: ${bookingLat}, Lng: ${bookingLng}]`);
-        console.log(`🛠️  REQUESTED SERVICE: ${service.name}`);
+        console.log(`🛠️  REQUESTED SERVICE: ${service.name} (${service._id})`);
 
+        // Find all profiles offering this service
         const providerProfiles = await ProviderProfile.find({
-            services: booking.service,
+            services: new mongoose.Types.ObjectId(serviceId),
         }).populate('user', 'firstName lastName email mobile role isActive');
 
-        console.log(`🔍 Found ${providerProfiles.length} provider(s) globally who offer the service: '${service.name}'.`);
+        console.log(`🔍 Found ${providerProfiles.length} provider(s) globally offering '${service.name}'.`);
 
         const currentProviderIds = [];
         const providerDistances = new Map();
 
         for (const profile of providerProfiles) {
-            if (!profile.user || !profile.user.isActive) continue;
+            console.log('\n---------------------------------------------');
+            
+            if (!profile.user) {
+                console.log(`⏩ Skipping Profile ID (${profile._id}): Linked user account does not exist.`);
+                continue;
+            }
+
+            console.log(`👨‍🔧 Evaluating Provider: ${profile.user.firstName} ${profile.user.lastName} (User ID: ${profile.user._id})`);
+
+            if (!profile.user.isActive) {
+                console.log(`   ❌ REJECTED: Provider user account is deactivated.`);
+                continue;
+            }
 
             const providerId = profile.user._id.toString();
-            
-            if (providerId === booking.user.toString()) {
-                console.log(`\n⏩ Skipping: ${profile.user.firstName} (Customer cannot match their own booking)`);
+            const customerId = booking.user?._id ? booking.user._id.toString() : booking.user.toString();
+
+            if (providerId === customerId) {
+                console.log(`   ❌ REJECTED: Provider is the creator of this booking (Customer cannot match their own booking).`);
                 continue;
             }
 
             if (!profile.location || !Array.isArray(profile.location.coordinates) || profile.location.coordinates.length !== 2) {
-                console.log(`\n⏩ Skipping: ${profile.user.firstName} (Provider has no location set in work details)`);
+                console.log(`   ❌ REJECTED: Provider has no location coordinates configured in Work Details.`);
                 continue;
             }
 
             const [providerLng, providerLat] = profile.location.coordinates;
             const providerRadius = Number(profile.radius || 0);
 
-            const distance = calculateDistance(bookingLat, bookingLng, providerLat, providerLng);
-
-            console.log(`\n👨‍🔧 Evaluating Provider: ${profile.user.firstName} ${profile.user.lastName} (${providerId})`);
             console.log(`   - Provider Location: [Lat: ${providerLat}, Lng: ${providerLng}]`);
-            console.log(`   - Provider Radius: ${providerRadius} km`);
+            console.log(`   - Provider Service Radius: ${providerRadius} km`);
+
+            // Check if coordinates are unconfigured default [0, 0]
+            if (providerLng === 0 && providerLat === 0) {
+                console.log(`   ❌ REJECTED: Provider coordinates are still set to default [0, 0]. Update Work Details location.`);
+                continue;
+            }
+
+            const distance = calculateDistance(bookingLat, bookingLng, providerLat, providerLng);
             console.log(`   - Calculated Distance: ${distance.toFixed(2)} km`);
 
             if (!Number.isFinite(providerRadius) || providerRadius <= 0) {
-                console.log(`   ❌ REJECTED: Provider has an invalid or zero radius.`);
+                console.log(`   ❌ REJECTED: Provider radius is invalid (${providerRadius}).`);
                 continue;
             }
             
             if (distance > providerRadius) {
                 const difference = (distance - providerRadius).toFixed(2);
-                console.log(`   ❌ REJECTED: Provider is too far away. (Exceeds radius by ${difference} km)`);
+                console.log(`   ❌ REJECTED: Out of range. (Exceeds radius by ${difference} km)`);
                 continue;
             }
 
-            console.log(`   ✅ MATCHED: Provider is within range!`);
+            console.log(`   ✅ MATCHED: Provider is eligible and within service range!`);
             currentProviderIds.push(providerId);
             providerDistances.set(providerId, distance);
         }
 
-        console.log('\n📋 --- MATCHING SUMMARY ---');
-        console.log(`✅ Total Eligible Providers Nearby: ${currentProviderIds.length}`);
+        console.log('\n=============================================');
+        console.log(`📋 MATCHING SUMMARY: ${currentProviderIds.length} Eligible Provider(s) Found`);
         console.log('=============================================\n');
 
         const oldProviderIds = (booking.notifiedProviders || []).map((id) => id.toString());
@@ -137,7 +157,9 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
                     distanceInKm: distance,
                     data: { bookingId: String(booking._id), distance: String(distance) },
                 });
-            } catch (error) {}
+            } catch (error) {
+                console.error(`Notification Error for Provider ${providerId}:`, error.message);
+            }
         }
 
         if (isUpdate) {
@@ -174,7 +196,8 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
 
 const notifyExistingProvidersUnavailable = async (booking) => {
     try {
-        const service = await Service.findById(booking.service);
+        const serviceId = booking.service?._id ? booking.service._id : booking.service;
+        const service = await Service.findById(serviceId);
         if (!service) return;
 
         const providerIds = (booking.notifiedProviders || []).map((id) => id.toString());
@@ -246,7 +269,6 @@ module.exports = {
             if (!booking || booking.deletedAt) return res.status(404).json({ success: false, message: 'Booking not found' });
             if (booking.status !== 0) return res.status(400).json({ success: false, message: 'Booking can only be updated while pending' });
 
-            // Allow updates and save...
             if (req.body.description) booking.description = req.body.description;
             if (req.body.address) booking.address = req.body.address;
             
@@ -276,10 +298,6 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }
     },
-
-    // ============================================================
-    // OFFERS MANAGEMENT
-    // ============================================================
 
     createBookingOffer: async (req, res) => {
         try {
@@ -366,12 +384,10 @@ module.exports = {
                 return res.status(400).json({ success: false, message: 'Approval window expired' });
             }
 
-            // Mark offer as Provider Approved
             offer.status = 3; // 3 = Accepted by Provider
             offer.providerApprovedAt = new Date();
             await offer.save();
 
-            // Assign Booking
             booking.status = 1; // 1 = Assigned/In Progress
             booking.provider = req.user.id;
             await booking.save();
@@ -379,7 +395,7 @@ module.exports = {
             // Reject all other pending/accepted offers for this booking
             await BookingOffer.updateMany(
                 { booking: booking._id, _id: { $ne: offer._id }, status: { $in: [0, 1] } },
-                { $set: { status: 2, rejectionReason: 'Another provider was assigned to this job' } } // Auto rejected
+                { $set: { status: 2, rejectionReason: 'Another provider was assigned to this job' } }
             );
 
             return res.status(200).json({ success: true, message: 'Booking confirmed successfully!' });
@@ -410,11 +426,9 @@ module.exports = {
             let query = {};
 
             if (role === 0) {
-                // User sees offers for their bookings
                 const userBookings = await Booking.find({ user: req.user.id }).distinct('_id');
                 query.booking = bookingId ? bookingId : { $in: userBookings };
             } else {
-                // Provider sees their own offers
                 query.provider = req.user.id;
                 if (bookingId) query.booking = bookingId;
             }
@@ -434,26 +448,20 @@ module.exports = {
         }
     },
 
-    // ============================================================
-    // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
-    // ============================================================
     getMyBookings: async (req, res) => {
         try {
             const { type } = req.query;
             const userId = req.user.id;
             const role = Number(req.user.role);
 
-            let query = { deletedAt: null }; // Default to active bookings
+            let query = { deletedAt: null };
 
             if (role === 0) {
-                // CUSTOMER
                 query.user = userId;
 
                 if (type === '0') {
-                    // Pending - No assigned provider yet
                     query.status = 0;
                 } else if (type === '2') {
-                    // Offered - Status 0 but has active offers
                     const offeredBookingIds = await BookingOffer.find({ 
                         booking: { $in: await Booking.find({user: userId}).distinct('_id') },
                         status: { $in: [0, 1] } 
@@ -461,36 +469,27 @@ module.exports = {
                     query._id = { $in: offeredBookingIds };
                     query.status = 0;
                 } else if (type === '3') {
-                    // Confirmed / Assigned
                     query.status = { $in: [1, 2] };
                 } else if (type === '4') {
-                    // Soft Deleted
                     delete query.deletedAt;
                     query.deletedAt = { $ne: null };
                 }
-
             } else if (role === 1) {
-                // PROVIDER
                 if (type === '0') {
-                    // Pending / New Leads (Provider notified but hasn't offered)
                     const myOffers = await BookingOffer.find({ provider: userId }).distinct('booking');
                     query.notifiedProviders = userId;
                     query.status = 0;
                     query._id = { $nin: myOffers };
                 } else if (type === '1') {
-                    // All Offered Bookings by Provider
                     const myOffers = await BookingOffer.find({ provider: userId }).distinct('booking');
                     query._id = { $in: myOffers };
                 } else if (type === '2') {
-                    // Confirmed / Assigned to Provider
                     query.provider = userId;
                     query.status = { $in: [1, 2] };
                 } else if (type === '3') {
-                    // Rejected Offers (by user or provider) or Timeout
                     const rejectedOffers = await BookingOffer.find({ provider: userId, status: { $in: [2, 4, 5] } }).distinct('booking');
                     query._id = { $in: rejectedOffers };
                 } else {
-                    // Default All
                     query.$or = [
                         { notifiedProviders: userId, status: 0 },
                         { provider: userId }
@@ -500,7 +499,6 @@ module.exports = {
                 return res.status(403).json({ success: false, message: 'Invalid role' });
             }
 
-            // Use .lean() so we can inject dynamic distance property
             let bookings = await Booking.find(query)
                 .populate('service', 'name image')
                 .populate('provider', 'firstName lastName mobile email profileImage')
@@ -508,7 +506,6 @@ module.exports = {
                 .sort({ createdAt: -1 })
                 .lean();
 
-            // If provider, dynamically append the distance to each booking
             if (role === 1) {
                 const profile = await ProviderProfile.findOne({ user: userId });
                 if (profile && profile.location && profile.location.coordinates) {
@@ -542,7 +539,6 @@ module.exports = {
             const userId = req.user.id.toString();
             const role = Number(req.user.role);
 
-            // Fetch even if deleted, in case user wants to view history
             let booking = await Booking.findById(id)
                 .populate('user', 'firstName lastName mobile email profileImage')
                 .populate('provider', 'firstName lastName mobile email profileImage')
