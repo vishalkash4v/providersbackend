@@ -2,14 +2,11 @@ const express = require('express');
 
 const router = express.Router();
 
-const bookingController =
-  require('../controllers/booking');
+const bookingController = require('../controllers/booking');
 
-const { authenticateToken } =
-  require('../middleware/jwt');
+const { authenticateToken } = require('../middleware/jwt');
 
-const ensureDB =
-  require('../middleware/db');
+const ensureDB = require('../middleware/db');
 
 
 // ============================================================
@@ -170,7 +167,10 @@ router.patch(
 
 
 // ============================================================
-// USER BOOKINGS
+// GET ALL BOOKINGS (UNIFIED FOR USER & PROVIDER)
+// ============================================================
+// Automatically filters by role (Customer/Provider).
+// Supports query params: ?type=new or ?status=pending
 // ============================================================
 
 router.get(
@@ -181,35 +181,15 @@ router.get(
 
 
 // ============================================================
-// BOOKING DETAILS
+// BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
+// ============================================================
+// Automatically strictly checks authorization based on role.
 // ============================================================
 
 router.get(
   '/details/:id',
   authenticateToken,
   bookingController.getBookingDetails
-);
-
-
-// ============================================================
-// PROVIDER JOBS
-// ============================================================
-
-router.get(
-  '/provider/jobs',
-  authenticateToken,
-  bookingController.getProviderJobs
-);
-
-
-// ============================================================
-// PROVIDER JOB DETAILS
-// ============================================================
-
-router.get(
-  '/provider/jobs/:id',
-  authenticateToken,
-  bookingController.getProviderJobDetails
 );
 
 
