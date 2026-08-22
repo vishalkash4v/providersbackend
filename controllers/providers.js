@@ -1,5 +1,6 @@
 const ProviderProfile = require('../models/ProviderProfile');
 const Service = require('../models/Service');
+const User = require('../models/User');
 const { validate } = require('../utils/fieldValidations');
 
 module.exports = {
@@ -180,6 +181,9 @@ module.exports = {
 
         await profile.save();
 
+        // MIRROR LOCATION TO USER MODEL FOR LOGIN API
+        await User.findByIdAndUpdate(userId, { location: location });
+
         const populated = await ProviderProfile.findById(profile._id)
           .populate('services', 'name image isActive')
           .populate('user', 'firstName lastName email mobile');
@@ -202,6 +206,9 @@ module.exports = {
         address: normalizedAddress,
       });
 
+      // MIRROR LOCATION TO USER MODEL FOR LOGIN API
+      await User.findByIdAndUpdate(userId, { location: location });
+
       // ============================================================
       // POPULATE RESPONSE
       // ============================================================
@@ -216,7 +223,7 @@ module.exports = {
       });
 
     } catch (error) {
-        console.error('Add Work Details Error:', error);
+      console.error('Add Work Details Error:', error);
 
       if (error.name === 'CastError') {
         return res.status(400).json({
@@ -406,6 +413,9 @@ module.exports = {
           type: 'Point',
           coordinates: [currentLongitude, currentLatitude],
         };
+
+        // MIRROR LOCATION TO USER MODEL FOR LOGIN API
+        await User.findByIdAndUpdate(userId, { location: profile.location });
       }
 
       // ============================================================
