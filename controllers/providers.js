@@ -32,17 +32,6 @@ module.exports = {
       // ============================================================
       // PARSE SERVICES
       // ============================================================
-      // JSON request:
-      // ["id1", "id2"]
-      //
-      // multipart/form-data:
-      // '["id1", "id2"]'
-      //
-      // Also supports:
-      // services=id1
-      // services=id2
-      // ============================================================
-
       if (typeof services === 'string') {
         try {
           services = JSON.parse(services);
@@ -72,17 +61,12 @@ module.exports = {
       // ============================================================
       // VALIDATE SERVICES
       // ============================================================
-
       if (!services.length) {
         return res.status(400).json({
           success: false,
           message: 'Please select at least one service',
         });
       }
-
-      // ============================================================
-      // VALIDATE SERVICE IDs
-      // ============================================================
 
       const validServices = await Service.find({
         _id: { $in: services },
@@ -99,7 +83,6 @@ module.exports = {
       // ============================================================
       // PARSE NUMBERS
       // ============================================================
-
       const parsedRadius = Number(radius);
       const parsedLatitude = Number(latitude);
       const parsedLongitude = Number(longitude);
@@ -107,7 +90,6 @@ module.exports = {
       // ============================================================
       // VALIDATE RADIUS
       // ============================================================
-
       if (!Number.isFinite(parsedRadius)) {
         return res.status(400).json({
           success: false,
@@ -122,7 +104,6 @@ module.exports = {
         });
       }
 
-      // Optional maximum radius
       if (parsedRadius > 500) {
         return res.status(400).json({
           success: false,
@@ -131,9 +112,8 @@ module.exports = {
       }
 
       // ============================================================
-      // VALIDATE LATITUDE
+      // VALIDATE COORDINATES
       // ============================================================
-
       if (!Number.isFinite(parsedLatitude)) {
         return res.status(400).json({
           success: false,
@@ -141,19 +121,12 @@ module.exports = {
         });
       }
 
-      if (
-        parsedLatitude < -90 ||
-        parsedLatitude > 90
-      ) {
+      if (parsedLatitude < -90 || parsedLatitude > 90) {
         return res.status(400).json({
           success: false,
           message: 'Latitude must be between -90 and 90',
         });
       }
-
-      // ============================================================
-      // VALIDATE LONGITUDE
-      // ============================================================
 
       if (!Number.isFinite(parsedLongitude)) {
         return res.status(400).json({
@@ -162,10 +135,7 @@ module.exports = {
         });
       }
 
-      if (
-        parsedLongitude < -180 ||
-        parsedLongitude > 180
-      ) {
+      if (parsedLongitude < -180 || parsedLongitude > 180) {
         return res.status(400).json({
           success: false,
           message: 'Longitude must be between -180 and 180',
@@ -173,11 +143,9 @@ module.exports = {
       }
 
       // ============================================================
-      // LOCATION
-      // GeoJSON format:
-      // [longitude, latitude]
+      // LOCATION GEOJSON
+      // Longitude MUST be index 0, Latitude MUST be index 1
       // ============================================================
-
       const location = {
         type: 'Point',
         coordinates: [
@@ -189,53 +157,36 @@ module.exports = {
       // ============================================================
       // ADDRESS
       // ============================================================
-
       const normalizedAddress =
-        address !== undefined &&
-        address !== null
+        address !== undefined && address !== null
           ? String(address).trim()
           : '';
 
       // ============================================================
       // FIND EXISTING PROFILE
       // ============================================================
-
-      let profile =
-        await ProviderProfile.findOne({
-          user: userId,
-        });
+      let profile = await ProviderProfile.findOne({
+        user: userId,
+      });
 
       // ============================================================
       // UPDATE EXISTING PROFILE
       // ============================================================
-
       if (profile) {
         profile.services = services;
         profile.radius = parsedRadius;
         profile.location = location;
-
-        // Update address even if user wants to clear it
         profile.address = normalizedAddress;
 
         await profile.save();
 
-        const populated =
-          await ProviderProfile.findById(
-            profile._id
-          )
-            .populate(
-              'services',
-              'name image isActive'
-            )
-            .populate(
-              'user',
-              'firstName lastName email mobile'
-            );
+        const populated = await ProviderProfile.findById(profile._id)
+          .populate('services', 'name image isActive')
+          .populate('user', 'firstName lastName email mobile');
 
         return res.status(200).json({
           success: true,
-          message:
-            'Work details updated successfully',
+          message: 'Work details updated successfully',
           data: populated,
         });
       }
@@ -243,61 +194,41 @@ module.exports = {
       // ============================================================
       // CREATE NEW PROFILE
       // ============================================================
-
-      profile =
-        await ProviderProfile.create({
-          user: userId,
-          services,
-          radius: parsedRadius,
-          location,
-          address: normalizedAddress,
-        });
+      profile = await ProviderProfile.create({
+        user: userId,
+        services,
+        radius: parsedRadius,
+        location,
+        address: normalizedAddress,
+      });
 
       // ============================================================
       // POPULATE RESPONSE
       // ============================================================
-
-      const populated =
-        await ProviderProfile.findById(
-          profile._id
-        )
-          .populate(
-            'services',
-            'name image isActive'
-          )
-          .populate(
-            'user',
-            'firstName lastName email mobile'
-          );
+      const populated = await ProviderProfile.findById(profile._id)
+        .populate('services', 'name image isActive')
+        .populate('user', 'firstName lastName email mobile');
 
       return res.status(201).json({
         success: true,
-        message:
-          'Work details saved successfully',
+        message: 'Work details saved successfully',
         data: populated,
       });
 
     } catch (error) {
-      console.error(
-        'Add Work Details Error:',
-        error
-      );
+        console.error('Add Work Details Error:', error);
 
-      // MongoDB invalid ObjectId
       if (error.name === 'CastError') {
         return res.status(400).json({
           success: false,
-          message:
-            'Invalid service ID or user ID',
+          message: 'Invalid service ID or user ID',
         });
       }
 
       return res.status(500).json({
         success: false,
-        message:
-          'Something went wrong',
-        error:
-          error.message,
+        message: 'Something went wrong',
+        error: error.message,
       });
     }
   },
@@ -328,26 +259,21 @@ module.exports = {
       // ============================================================
       // FIND PROFILE
       // ============================================================
-
-      const profile =
-        await ProviderProfile.findOne({
-          user: userId,
-        });
+      const profile = await ProviderProfile.findOne({
+        user: userId,
+      });
 
       if (!profile) {
         return res.status(404).json({
           success: false,
-          message:
-            'Work details not found. Please add your work details first.',
+          message: 'Work details not found. Please add your work details first.',
         });
       }
 
       // ============================================================
       // SERVICES
       // ============================================================
-
       if (services !== undefined) {
-
         if (typeof services === 'string') {
           try {
             services = JSON.parse(services);
@@ -366,9 +292,7 @@ module.exports = {
         services = [
           ...new Set(
             services
-              .map((id) =>
-                String(id).trim()
-              )
+              .map((id) => String(id).trim())
               .filter(Boolean)
           ),
         ];
@@ -376,241 +300,153 @@ module.exports = {
         if (!services.length) {
           return res.status(400).json({
             success: false,
-            message:
-              'Please select at least one service',
+            message: 'Please select at least one service',
           });
         }
 
-        const validServices =
-          await Service.find({
-            _id: {
-              $in: services,
-            },
-            isActive: true,
-          }).select('_id');
+        const validServices = await Service.find({
+          _id: { $in: services },
+          isActive: true,
+        }).select('_id');
 
-        if (
-          validServices.length !==
-          services.length
-        ) {
+        if (validServices.length !== services.length) {
           return res.status(400).json({
             success: false,
-            message:
-              'One or more services are invalid or inactive',
+            message: 'One or more services are invalid or inactive',
           });
         }
 
-        profile.services =
-          services;
+        profile.services = services;
       }
 
       // ============================================================
       // RADIUS
       // ============================================================
+      if (radius !== undefined && radius !== null && radius !== '') {
+        const parsedRadius = Number(radius);
 
-      if (
-        radius !== undefined &&
-        radius !== null &&
-        radius !== ''
-      ) {
-        const parsedRadius =
-          Number(radius);
-
-        if (
-          !Number.isFinite(
-            parsedRadius
-          )
-        ) {
+        if (!Number.isFinite(parsedRadius)) {
           return res.status(400).json({
             success: false,
-            message:
-              'Radius must be a valid number',
+            message: 'Radius must be a valid number',
           });
         }
 
         if (parsedRadius <= 0) {
           return res.status(400).json({
             success: false,
-            message:
-              'Radius must be greater than 0',
+            message: 'Radius must be greater than 0',
           });
         }
 
         if (parsedRadius > 500) {
           return res.status(400).json({
             success: false,
-            message:
-              'Radius cannot be greater than 500',
+            message: 'Radius cannot be greater than 500',
           });
         }
 
-        profile.radius =
-          parsedRadius;
+        profile.radius = parsedRadius;
       }
 
       // ============================================================
       // LOCATION
       // ============================================================
+      const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
+      const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
 
-      const hasLatitude =
-        latitude !== undefined &&
-        latitude !== null &&
-        latitude !== '';
-
-      const hasLongitude =
-        longitude !== undefined &&
-        longitude !== null &&
-        longitude !== '';
-
-      if (
-        hasLatitude ||
-        hasLongitude
-      ) {
-        // Existing coordinates
-        let currentLongitude =
-          profile.location
-            ?.coordinates?.[0];
-
-        let currentLatitude =
-          profile.location
-            ?.coordinates?.[1];
+      if (hasLatitude || hasLongitude) {
+        // Fallback to existing coordinates if only one is updated
+        let currentLongitude = profile.location?.coordinates?.[0];
+        let currentLatitude = profile.location?.coordinates?.[1];
 
         if (hasLatitude) {
-          currentLatitude =
-            Number(latitude);
+          currentLatitude = Number(latitude);
         }
 
         if (hasLongitude) {
-          currentLongitude =
-            Number(longitude);
+          currentLongitude = Number(longitude);
         }
 
-        // Both coordinates must exist
+        // Both coordinates must ultimately exist
         if (
-          currentLatitude ===
-            undefined ||
-          currentLatitude ===
-            null ||
-          currentLongitude ===
-            undefined ||
-          currentLongitude ===
-            null
+          currentLatitude === undefined ||
+          currentLatitude === null ||
+          currentLongitude === undefined ||
+          currentLongitude === null
         ) {
           return res.status(400).json({
             success: false,
-            message:
-              'Both latitude and longitude are required when updating location',
+            message: 'Both latitude and longitude are required when updating location',
           });
         }
 
-        if (
-          !Number.isFinite(
-            currentLatitude
-          ) ||
-          !Number.isFinite(
-            currentLongitude
-          )
-        ) {
+        if (!Number.isFinite(currentLatitude) || !Number.isFinite(currentLongitude)) {
           return res.status(400).json({
             success: false,
-            message:
-              'Latitude and longitude must be valid numbers',
+            message: 'Latitude and longitude must be valid numbers',
           });
         }
 
-        if (
-          currentLatitude < -90 ||
-          currentLatitude > 90
-        ) {
+        if (currentLatitude < -90 || currentLatitude > 90) {
           return res.status(400).json({
             success: false,
-            message:
-              'Latitude must be between -90 and 90',
+            message: 'Latitude must be between -90 and 90',
           });
         }
 
-        if (
-          currentLongitude < -180 ||
-          currentLongitude > 180
-        ) {
+        if (currentLongitude < -180 || currentLongitude > 180) {
           return res.status(400).json({
-          success: false,
-          message:
-            'Longitude must be between -180 and 180',
-        });
+            success: false,
+            message: 'Longitude must be between -180 and 180',
+          });
         }
 
         profile.location = {
           type: 'Point',
-          coordinates: [
-            currentLongitude,
-            currentLatitude,
-          ],
+          coordinates: [currentLongitude, currentLatitude],
         };
       }
 
       // ============================================================
       // ADDRESS
       // ============================================================
-
       if (address !== undefined) {
-        profile.address =
-          String(address).trim();
+        profile.address = String(address).trim();
       }
 
       // ============================================================
       // SAVE
       // ============================================================
-
       await profile.save();
 
       // ============================================================
       // POPULATE
       // ============================================================
-
-      const populated =
-        await ProviderProfile.findById(
-          profile._id
-        )
-          .populate(
-            'services',
-            'name image isActive'
-          )
-          .populate(
-            'user',
-            'firstName lastName email mobile'
-          );
+      const populated = await ProviderProfile.findById(profile._id)
+        .populate('services', 'name image isActive')
+        .populate('user', 'firstName lastName email mobile');
 
       return res.status(200).json({
         success: true,
-        message:
-          'Work details updated successfully',
+        message: 'Work details updated successfully',
         data: populated,
       });
 
     } catch (error) {
-      console.error(
-        'Update Work Details Error:',
-        error
-      );
+      console.error('Update Work Details Error:', error);
 
-      if (
-        error.name ===
-        'CastError'
-      ) {
+      if (error.name === 'CastError') {
         return res.status(400).json({
           success: false,
-          message:
-            'Invalid service ID or data',
+          message: 'Invalid service ID or data',
         });
       }
 
       return res.status(500).json({
         success: false,
-        message:
-          'Something went wrong',
-        error:
-          error.message,
+        message: 'Something went wrong',
+        error: error.message,
       });
     }
   },
@@ -621,24 +457,16 @@ module.exports = {
   // ============================================================
   getMyWorkDetails: async (req, res) => {
     try {
-      const profile =
-        await ProviderProfile.findOne({
-          user: req.user.id,
-        })
-          .populate(
-            'services',
-            'name image isActive'
-          )
-          .populate(
-            'user',
-            'firstName lastName email mobile'
-          );
+      const profile = await ProviderProfile.findOne({
+        user: req.user.id,
+      })
+        .populate('services', 'name image isActive')
+        .populate('user', 'firstName lastName email mobile');
 
       if (!profile) {
         return res.status(404).json({
           success: false,
-          message:
-            'Work details not found. Please add your services first.',
+          message: 'Work details not found. Please add your services first.',
         });
       }
 
@@ -648,17 +476,12 @@ module.exports = {
       });
 
     } catch (error) {
-      console.error(
-        'Get My Work Details Error:',
-        error
-      );
+      console.error('Get My Work Details Error:', error);
 
       return res.status(500).json({
         success: false,
-        message:
-          'Something went wrong',
-        error:
-          error.message,
+        message: 'Something went wrong',
+        error: error.message,
       });
     }
   },

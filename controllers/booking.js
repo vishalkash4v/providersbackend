@@ -100,364 +100,224 @@ const normalizeImagePaths = (images) => {
 };
 
 
-const notifyMatchingProviders = async (
-    booking,
-    isUpdate = false
-) => {
+const notifyMatchingProviders = async (booking, isUpdate = false) => {
     try {
-        const service = await Service.findById(
-            booking.service
-        );
+        console.log('\n=============================================');
+        console.log('🛎️  STARTING PROVIDER MATCHING PROCESS');
+        console.log('Booking ID:', booking._id);
+
+        const service = await Service.findById(booking.service);
 
         if (!service) {
+            console.log('❌ Service not found. Exiting.');
             return;
         }
 
         // Only active pending bookings
-        if (
-            booking.status !== 'PENDING' ||
-            !booking.isActive
-        ) {
+        if (booking.status !== 'PENDING' || !booking.isActive) {
+            console.log('❌ Booking is not active/pending. Exiting.');
             return;
         }
 
         if (
             !booking.location ||
-            !Array.isArray(
-                booking.location.coordinates
-            ) ||
+            !Array.isArray(booking.location.coordinates) ||
             booking.location.coordinates.length !== 2
         ) {
+            console.log('❌ Booking lacks valid location coordinates. Exiting.');
             return;
         }
 
-        const [
-            bookingLng,
-            bookingLat,
-        ] = booking.location.coordinates;
+        const [bookingLng, bookingLat] = booking.location.coordinates;
+        console.log(`📍 BOOKING LOCATION: [Lat: ${bookingLat}, Lng: ${bookingLng}]`);
+        console.log(`🛠️  REQUESTED SERVICE: ${service.name}`);
 
         // ========================================================
         // FIND PROVIDERS WHO OFFER THIS SERVICE
         // ========================================================
 
-        const providerProfiles =
-            await ProviderProfile.find({
-                services: booking.service,
-                location: {
-                    $exists: true,
-                },
-            }).populate(
-                'user',
-                'firstName lastName email mobile role isActive'
-            );
+        const providerProfiles = await ProviderProfile.find({
+            services: booking.service,
+        }).populate(
+            'user',
+            // REMOVED 'location' from here because it now lives on ProviderProfile
+            'firstName lastName email mobile role isActive' 
+        );
+
+        console.log(`🔍 Found ${providerProfiles.length} provider(s) offering this service globally.`);
 
         const currentProviderIds = [];
         const providerDistances = new Map();
 
         // ========================================================
-        // CHECK PROVIDER DISTANCE
+        // EVALUATE EACH PROVIDER'S DISTANCE
         // ========================================================
 
-        for (
-            const profile of providerProfiles
-        ) {
-            if (!profile.user) {
-                continue;
-            }
+        for (const profile of providerProfiles) {
+            if (!profile.user) continue;
+            if (!profile.user.isActive) continue;
 
-            if (!profile.user.isActive) {
-                continue;
-            }
+            const providerId = profile.user._id.toString();
 
             // Don't notify customer as provider
-            if (
-                profile.user._id.toString() ===
-                booking.user.toString()
-            ) {
+            if (providerId === booking.user.toString()) {
+                console.log(`⏩ Skipping: ${profile.user.firstName} (Customer cannot match their own booking)`);
                 continue;
             }
 
+            // READ FROM profile.location (The ProviderProfile model) instead of profile.user
             if (
                 !profile.location ||
-                !Array.isArray(
-                    profile.location.coordinates
-                ) ||
+                !Array.isArray(profile.location.coordinates) ||
                 profile.location.coordinates.length !== 2
-            ) {
+            ) 
+            {
+                console.log(`⏩ Skipping: ${profile.user.firstName} (Provider has no location set in work details)`);
                 continue;
             }
 
-            const [
-                providerLng,
+            // READ FROM profile.location
+            const [providerLng, providerLat] = profile.location.coordinates;
+            const providerRadius = Number(profile.radius || 0);
+
+            // Calculate exact distance
+            const distance = calculateDistance(
+                bookingLat,
+                bookingLng,
                 providerLat,
-            ] = profile.location.coordinates;
+                providerLng
+            );
 
-            const distance =
-                calculateDistance(
-                    bookingLat,
-                    bookingLng,
-                    providerLat,
-                    providerLng
-                );
+            console.log(`\n👨‍🔧 Evaluating Provider: ${profile.user.firstName} ${profile.user.lastName} (${providerId})`);
+            console.log(`   - Provider Location: [Lat: ${providerLat}, Lng: ${providerLng}]`);
+            console.log(`   - Provider Radius: ${providerRadius} km`);
+            console.log(`   - Calculated Distance: ${distance.toFixed(2)} km`);
 
-            const providerRadius =
-                Number(profile.radius);
-
-            if (
-                !Number.isFinite(
-                    providerRadius
-                ) ||
-                providerRadius <= 0
-            ) {
+            if (!Number.isFinite(providerRadius) || providerRadius <= 0) {
+                console.log(`   ❌ REJECTED: Provider has an invalid radius.`);
                 continue;
             }
 
             // Provider is outside his service radius
-            if (
-                distance > providerRadius
-            ) {
+            if (distance > providerRadius) {
+                console.log(`   ❌ REJECTED: Provider is too far away.`);
                 continue;
             }
 
-            const providerId =
-                profile.user._id.toString();
-
-            currentProviderIds.push(
-                providerId
-            );
-
-            providerDistances.set(
-                providerId,
-                distance
-            );
+            console.log(`   ✅ MATCHED: Provider is within range!`);
+            currentProviderIds.push(providerId);
+            providerDistances.set(providerId, distance);
         }
+
+        console.log('\n📋 --- MATCHING SUMMARY ---');
+        console.log(`✅ Total Eligible Providers Nearby: ${currentProviderIds.length}`);
+        console.log('=============================================\n');
 
         // ========================================================
         // OLD PROVIDERS
         // ========================================================
-
-        const oldProviderIds =
-            (
-                booking.notifiedProviders ||
-                []
-            ).map((id) =>
-                id.toString()
-            );
+        const oldProviderIds = (booking.notifiedProviders || []).map((id) => id.toString());
 
         // ========================================================
         // NEW PROVIDERS
         // ========================================================
-
-        const newProviderIds =
-            currentProviderIds.filter(
-                (id) =>
-                    !oldProviderIds.includes(id)
-            );
+        const newProviderIds = currentProviderIds.filter(
+            (id) => !oldProviderIds.includes(id)
+        );
 
         // ========================================================
         // EXISTING PROVIDERS
         // ========================================================
-
-        const existingProviderIds =
-            currentProviderIds.filter(
-                (id) =>
-                    oldProviderIds.includes(id)
-            );
+        const existingProviderIds = currentProviderIds.filter(
+            (id) => oldProviderIds.includes(id)
+        );
 
         // ========================================================
         // PROVIDERS WHO NO LONGER MATCH
         // ========================================================
-
-        const removedProviderIds =
-            oldProviderIds.filter(
-                (id) =>
-                    !currentProviderIds.includes(id)
-            );
+        const removedProviderIds = oldProviderIds.filter(
+            (id) => !currentProviderIds.includes(id)
+        );
 
         // ========================================================
         // NOTIFY NEW PROVIDERS
         // ========================================================
-
-        for (
-            const providerId of newProviderIds
-        ) {
-            const distance =
-                providerDistances.get(
-                    providerId
-                );
-
+        for (const providerId of newProviderIds) {
+            const distance = providerDistances.get(providerId);
             try {
                 await notifyUser({
                     userId: providerId,
-
-                    type:
-                        'NEW_BOOKING_REQUEST',
-
-                    title:
-                        'New Service Request',
-
-                    message:
-                        `Someone is looking for ${service.name} at ${booking.address ||
-                        'the selected location'
-                        }, approximately ${Number(
-                            distance
-                        ).toFixed(1)} km from you.`,
-
-                    bookingId:
-                        booking._id,
-
-                    serviceId:
-                        service._id,
-
-                    distanceInKm:
-                        distance,
-
+                    type: 'NEW_BOOKING_REQUEST',
+                    title: 'New Service Request',
+                    message: `Someone is looking for ${service.name} at ${
+                        booking.address || 'the selected location'
+                    }, approximately ${Number(distance).toFixed(1)} km from you.`,
+                    bookingId: booking._id,
+                    serviceId: service._id,
+                    distanceInKm: distance,
                     data: {
-                        bookingId:
-                            String(booking._id),
-
-                        serviceId:
-                            String(service._id),
-
-                        bookingStatus:
-                            booking.status,
-
-                        bookingActive:
-                            booking.isActive,
-
-                        distance:
-                            String(distance),
-
-                        latitude:
-                            String(bookingLat),
-
-                        longitude:
-                            String(bookingLng),
+                        bookingId: String(booking._id),
+                        serviceId: String(service._id),
+                        bookingStatus: booking.status,
+                        bookingActive: booking.isActive,
+                        distance: String(distance),
+                        latitude: String(bookingLat),
+                        longitude: String(bookingLng),
                     },
                 });
             } catch (error) {
-                console.error(
-                    `New provider notification error for ${providerId}:`,
-                    error.message
-                );
+                console.error(`New provider notification error for ${providerId}:`, error.message);
             }
         }
 
         // ========================================================
         // NOTIFY EXISTING PROVIDERS ON UPDATE
         // ========================================================
-
         if (isUpdate) {
-            for (
-                const providerId of
-                existingProviderIds
-            ) {
-                const distance =
-                    providerDistances.get(
-                        providerId
-                    );
-
+            for (const providerId of existingProviderIds) {
+                const distance = providerDistances.get(providerId);
                 try {
                     await notifyUser({
                         userId: providerId,
-
-                        type:
-                            'BOOKING_UPDATED',
-
-                        title:
-                            'Booking Updated',
-
-                        message:
-                            `The ${service.name} service request has been updated. Please check the latest details.`,
-
-                        bookingId:
-                            booking._id,
-
-                        serviceId:
-                            service._id,
-
-                        distanceInKm:
-                            distance,
-
+                        type: 'BOOKING_UPDATED',
+                        title: 'Booking Updated',
+                        message: `The ${service.name} service request has been updated. Please check the latest details.`,
+                        bookingId: booking._id,
+                        serviceId: service._id,
+                        distanceInKm: distance,
                         data: {
-                            bookingId:
-                                String(booking._id),
-
-                            serviceId:
-                                String(service._id),
-
-                            bookingStatus:
-                                booking.status,
-
-                            bookingActive:
-                                booking.isActive,
-
-                            distance:
-                                String(distance),
-
-                            latitude:
-                                String(bookingLat),
-
-                            longitude:
-                                String(bookingLng),
+                            bookingId: String(booking._id),
+                            serviceId: String(service._id),
+                            bookingStatus: booking.status,
+                            bookingActive: booking.isActive,
+                            distance: String(distance),
+                            latitude: String(bookingLat),
+                            longitude: String(bookingLng),
                         },
                     });
                 } catch (error) {
-                    console.error(
-                        `Booking update notification error for ${providerId}:`,
-                        error.message
-                    );
+                    console.error(`Booking update notification error for ${providerId}:`, error.message);
                 }
             }
-        }
 
-        // ========================================================
-        // PROVIDERS WHO NO LONGER MATCH
-        // ========================================================
-
-        if (isUpdate) {
-            for (
-                const providerId of
-                removedProviderIds
-            ) {
+            for (const providerId of removedProviderIds) {
                 try {
                     await notifyUser({
                         userId: providerId,
-
-                        type:
-                            'BOOKING_UNAVAILABLE',
-
-                        title:
-                            'Booking No Longer Available',
-
-                        message:
-                            `The ${service.name} service request is no longer available for you.`,
-
-                        bookingId:
-                            booking._id,
-
-                        serviceId:
-                            service._id,
-
+                        type: 'BOOKING_UNAVAILABLE',
+                        title: 'Booking No Longer Available',
+                        message: `The ${service.name} service request is no longer available for you.`,
+                        bookingId: booking._id,
+                        serviceId: service._id,
                         data: {
-                            bookingId:
-                                String(booking._id),
-
-                            serviceId:
-                                String(service._id),
-
-                            bookingStatus:
-                                booking.status,
-
-                            bookingActive:
-                                false,
+                            bookingId: String(booking._id),
+                            serviceId: String(service._id),
+                            bookingStatus: booking.status,
+                            bookingActive: false,
                         },
                     });
                 } catch (error) {
-                    console.error(
-                        `Booking unavailable notification error for ${providerId}:`,
-                        error.message
-                    );
+                    console.error(`Booking unavailable notification error for ${providerId}:`, error.message);
                 }
             }
         }
@@ -465,20 +325,14 @@ const notifyMatchingProviders = async (
         // ========================================================
         // SAVE CURRENT PROVIDERS
         // ========================================================
-
-        booking.notifiedProviders =
-            currentProviderIds.map(
-                (id) =>
-                    new mongoose.Types.ObjectId(id)
-            );
+        booking.notifiedProviders = currentProviderIds.map(
+            (id) => new mongoose.Types.ObjectId(id)
+        );
 
         await booking.save();
 
     } catch (error) {
-        console.error(
-            'notifyMatchingProviders Error:',
-            error
-        );
+        console.error('notifyMatchingProviders Error:', error);
     }
 };
 
