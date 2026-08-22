@@ -12,6 +12,7 @@ const { calculateDistance } = require('../utils/distance');
 const { notifyUser } = require('../utils/notification');
 const { useBookingCredit, addBookingCredits } = require('../utils/bookingCredits');
 
+
 // ============================================================
 // NORMALIZE IMAGE PATHS
 // ============================================================
@@ -42,10 +43,10 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
         console.log('\n=============================================');
         console.log('🛎️  STARTING PROVIDER MATCHING PROCESS');
         console.log(`Booking ID: ${booking._id}`);
-        
+
         const serviceId = booking.service?._id ? booking.service._id : booking.service;
         const service = await Service.findById(serviceId);
-        
+
         if (!service) {
             console.log('❌ Service not found in database. Exiting.');
             return;
@@ -78,7 +79,7 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
 
         for (const profile of providerProfiles) {
             console.log('\n---------------------------------------------');
-            
+
             if (!profile.user) {
                 console.log(`⏩ Skipping Profile ID (${profile._id}): Linked user account does not exist.`);
                 continue;
@@ -123,7 +124,7 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
                 console.log(`   ❌ REJECTED: Provider radius is invalid (${providerRadius}).`);
                 continue;
             }
-            
+
             if (distance > providerRadius) {
                 const difference = (distance - providerRadius).toFixed(2);
                 console.log(`   ❌ REJECTED: Out of range. (Exceeds radius by ${difference} km)`);
@@ -172,7 +173,7 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
                         message: `The ${service.name} service request has been updated.`,
                         bookingId: booking._id,
                     });
-                } catch (error) {}
+                } catch (error) { }
             }
             for (const providerId of removedProviderIds) {
                 try {
@@ -183,7 +184,7 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
                         message: `The ${service.name} request is no longer available in your radius.`,
                         bookingId: booking._id,
                     });
-                } catch (error) {}
+                } catch (error) { }
             }
         }
 
@@ -210,11 +211,11 @@ const notifyExistingProvidersUnavailable = async (booking) => {
                     message: `The ${service.name} request has been cancelled or assigned.`,
                     bookingId: booking._id,
                 });
-            } catch (error) {}
+            } catch (error) { }
         }
         booking.notifiedProviders = [];
         await booking.save();
-    } catch (error) {}
+    } catch (error) { }
 };
 
 // ============================================================
@@ -257,7 +258,10 @@ module.exports = {
 
             await notifyMatchingProviders(booking, false);
 
-            return res.status(201).json({ success: true, message: 'Booking created successfully.' });
+            return res.status(201).json({
+                success: true,
+                message: 'Your request has been sent to nearby service providers. You can view details in My Bookings.'
+            });
         } catch (error) {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }
@@ -271,11 +275,14 @@ module.exports = {
 
             if (req.body.description) booking.description = req.body.description;
             if (req.body.address) booking.address = req.body.address;
-            
+
             await booking.save();
             await notifyMatchingProviders(booking, true);
 
-            return res.status(200).json({ success: true, message: 'Booking updated' });
+            return res.status(200).json({
+                success: true,
+                message: 'Your request has been updated and sent to nearby service providers. You can view details in My Bookings.'
+            });
         } catch (error) {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }
@@ -285,24 +292,57 @@ module.exports = {
         try {
             const booking = await Booking.findOne({ _id: req.params.id, user: req.user.id });
             if (!booking || booking.deletedAt) return res.status(404).json({ success: false, message: 'Booking not found' });
-            if (booking.status !== 0) return res.status(400).json({ success: false, message: 'Assigned bookings cannot be deleted' });
 
+            // Allow deletion unless the booking is already completed
+            if (booking.status === 2) return res.status(400).json({ success: false, message: 'Completed bookings cannot be deleted or cancelled' });
+
+            const previousStatus = booking.status;
+            const assignedProvider = booking.provider;
+
+            // Soft Delete the booking
             booking.isActive = false;
             booking.deletedAt = new Date();
             await booking.save();
-            
-            await notifyExistingProvidersUnavailable(booking);
 
-            return res.status(200).json({ success: true, message: 'Booking deleted successfully' });
+            // If the booking was already ASSIGNED (Status 1), notify that specific provider
+            if (previousStatus === 1 && assignedProvider) {
+                try {
+                    await notifyUser({
+                        userId: assignedProvider,
+                        type: 'BOOKING_CANCELLED_BY_USER',
+                        title: 'Booking Cancelled',
+                        message: 'The customer has cancelled the booking after it was assigned to you.',
+                        bookingId: booking._id,
+                    });
+
+                    // Mark their accepted offer as rejected/cancelled
+                    await BookingOffer.findOneAndUpdate(
+                        { booking: booking._id, provider: assignedProvider, status: 3 },
+                        { $set: { status: 2, rejectionReason: 'Customer cancelled the booking after assignment' } }
+                    );
+                } catch (error) {
+                    console.log("Failed to notify provider of cancellation");
+                }
+            } else {
+                // If it was still pending, notify all nearby providers that it's gone
+                await notifyExistingProvidersUnavailable(booking);
+            }
+
+            return res.status(200).json({ success: true, message: 'Booking cancelled successfully' });
         } catch (error) {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }
     },
 
+    // ============================================================
+    // OFFERS MANAGEMENT
+    // ============================================================
+
     createBookingOffer: async (req, res) => {
         try {
             const { id } = req.params;
             const amount = Number(req.body.offerAmount);
+            const proposedDateTime = req.body.proposedDateTime; // Extract from body
 
             if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ success: false, message: 'Valid offerAmount is required' });
 
@@ -324,6 +364,7 @@ module.exports = {
                 booking: booking._id,
                 provider: req.user.id,
                 offerAmount: amount,
+                proposedDateTime: proposedDateTime ? String(proposedDateTime).trim() : null, // Save DateTime string here
                 distanceKm: Number(distanceKm.toFixed(2)),
                 status: 0, // 0 = Pending
             });
@@ -373,7 +414,7 @@ module.exports = {
         try {
             const offer = await BookingOffer.findById(req.params.offerId).populate('booking');
             if (!offer || offer.provider.toString() !== req.user.id.toString()) return res.status(404).json({ success: false, message: 'Offer not found' });
-            
+
             const booking = offer.booking;
             if (booking.status !== 0 || booking.deletedAt) return res.status(400).json({ success: false, message: 'Booking no longer available' });
             if (offer.status !== 1) return res.status(400).json({ success: false, message: 'Offer not waiting for approval' });
@@ -384,22 +425,127 @@ module.exports = {
                 return res.status(400).json({ success: false, message: 'Approval window expired' });
             }
 
-            offer.status = 3; // 3 = Accepted by Provider
-            offer.providerApprovedAt = new Date();
+            const provider = await User.findById(req.user.id);
+            if (!provider) return res.status(404).json({ success: false, message: 'Provider not found' });
+
+            // Ensure distance is saved
+            const providerProfile = await ProviderProfile.findOne({ user: req.user.id });
+            const [pLng, pLat] = providerProfile.location.coordinates;
+            const [bLng, bLat] = booking.location.coordinates;
+            const distanceKm = calculateDistance(bLat, bLng, pLat, pLng);
+            offer.distanceKm = Number(distanceKm.toFixed(2));
+
+            // ========================================================
+            // FREE BOOKING LOGIC
+            // ========================================================
+            if (Number(provider.bookingCredits || 0) > 0) {
+                // Atomic booking claim to prevent race conditions
+                const claimedBooking = await Booking.findOneAndUpdate(
+                    { _id: booking._id, status: 0, isActive: true, provider: null, deletedAt: null },
+                    { $set: { provider: req.user.id, status: 1, providerAcceptedAt: new Date() } },
+                    { new: true }
+                );
+
+                if (!claimedBooking) {
+                    return res.status(409).json({ success: false, message: 'Another provider has already been assigned this booking' });
+                }
+
+                const creditUsed = await useBookingCredit({ providerId: req.user.id, bookingId: booking._id });
+
+                if (!creditUsed) {
+                    await Booking.findByIdAndUpdate(booking._id, { $set: { provider: null, status: 0, providerAcceptedAt: null } });
+                    return res.status(403).json({ success: false, message: 'Booking credit could not be used' });
+                }
+
+                offer.accessType = 'FREE_CREDIT';
+                offer.accessFee = 0;
+                offer.paymentStatus = 'NOT_REQUIRED';
+                offer.providerApprovedAt = new Date();
+                offer.status = 3; // 3 = Accepted by Provider
+                await offer.save();
+
+                // ----------------------------------------------------
+                // REFERRAL REWARD LOGIC
+                // (Rewards the person who referred THIS provider)
+                // ----------------------------------------------------
+                const referral = await Referral.findOne({ referredProvider: req.user.id, status: 'PENDING' });
+                if (referral) {
+                    const rewardCredits = Number(process.env.PROVIDER_FREE_JOBS_PER_REFERRAL || 0);
+                    if (rewardCredits > 0) {
+                        await addBookingCredits({ providerId: referral.referrer, amount: rewardCredits, type: 'REFERRAL_REWARD', referral: referral._id, booking: booking._id, description: 'Referral reward for referred provider first approved job' });
+                        referral.status = 'SUCCESS';
+                        referral.firstBooking = booking._id;
+                        referral.successfulAt = new Date();
+                        referral.rewardCredits = rewardCredits;
+                        await referral.save();
+                    }
+                }
+
+                // Reject other pending offers since this one won
+                await BookingOffer.updateMany(
+                    { booking: booking._id, _id: { $ne: offer._id }, status: { $in: [0, 1] } },
+                    { $set: { status: 2, rejectionReason: 'Another provider was assigned to this job' } }
+                );
+
+                // ----------------------------------------------------
+                // CALCULATE PROVIDER STATS (Credits & Referrals)
+                // ----------------------------------------------------
+                const updatedProvider = await User.findById(req.user.id);
+                const creditsLeft = Number(updatedProvider.bookingCredits || 0);
+                const creditsTotal = Number(updatedProvider.bookingCreditsTotal || 0);
+                const creditsUsed = Math.max(0, creditsTotal - creditsLeft);
+
+                // Count referrals sent BY this provider that are still pending
+                const pendingReferrals = await Referral.countDocuments({ referrer: req.user.id, status: 'PENDING' });
+
+                return res.status(200).json({
+                    success: true,
+                    message: 'Booking confirmed successfully using free booking credit!',
+                    data: {
+                        creditsLeft,
+                        creditsUsed,
+                        pendingReferrals
+                    }
+                });
+            }
+
+            // ========================================================
+            // PAID BOOKING LOGIC
+            // ========================================================
+            const baseFee = Number(process.env.BOOKING_FEE_BASE || 20);
+            const perKmFee = Number(process.env.BOOKING_FEE_PER_KM || 5);
+            const accessFee = Number((baseFee + Number(distanceKm) * perKmFee).toFixed(2));
+
+            offer.accessType = 'PAID';
+            offer.accessFee = accessFee;
+            offer.paymentStatus = 'PENDING';
+            // Status remains 1 (Accepted by User) until payment succeeds!
             await offer.save();
 
-            booking.status = 1; // 1 = Assigned/In Progress
-            booking.provider = req.user.id;
-            await booking.save();
+            // Calculate stats to show on the payment screen as well
+            const creditsTotal = Number(provider.bookingCreditsTotal || 0);
+            const pendingReferrals = await Referral.countDocuments({ referrer: req.user.id, status: 'PENDING' });
 
-            // Reject all other pending/accepted offers for this booking
-            await BookingOffer.updateMany(
-                { booking: booking._id, _id: { $ne: offer._id }, status: { $in: [0, 1] } },
-                { $set: { status: 2, rejectionReason: 'Another provider was assigned to this job' } }
-            );
+            return res.status(402).json({
+                success: false,
+                message: 'Payment is required before you can approve this booking',
+                code: 'BOOKING_PAYMENT_REQUIRED',
+                data: {
+                    offerId: offer._id,
+                    bookingId: booking._id,
+                    distanceKm: offer.distanceKm,
+                    accessFee: offer.accessFee,
+                    paymentStatus: offer.paymentStatus,
+                    stats: {
+                        creditsLeft: 0,
+                        creditsUsed: creditsTotal,
+                        pendingReferrals
+                    }
+                },
+            });
 
-            return res.status(200).json({ success: true, message: 'Booking confirmed successfully!' });
         } catch (error) {
+            console.error('Approve Booking Offer Error:', error);
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
     },
@@ -462,9 +608,9 @@ module.exports = {
                 if (type === '0') {
                     query.status = 0;
                 } else if (type === '2') {
-                    const offeredBookingIds = await BookingOffer.find({ 
-                        booking: { $in: await Booking.find({user: userId}).distinct('_id') },
-                        status: { $in: [0, 1] } 
+                    const offeredBookingIds = await BookingOffer.find({
+                        booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
+                        status: { $in: [0, 1] }
                     }).distinct('booking');
                     query._id = { $in: offeredBookingIds };
                     query.status = 0;

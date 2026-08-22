@@ -31,6 +31,11 @@ const bookingOfferSchema = new mongoose.Schema(
       min: 0,
     },
 
+    // 👇 ONLY THIS NEW FIELD REQUIRED 👇
+    proposedDateTime: {
+        type: String,
+        default: null,
+    },
     // ============================================================
     // OFFER STATUS
     // ============================================================
