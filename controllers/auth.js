@@ -38,8 +38,7 @@ module.exports = {
         'lastName',
         'mobile',
         'email',
-        'password',
-        'confirmPassword',
+        'password',        
         'role',
       ];
 
@@ -55,7 +54,6 @@ module.exports = {
         mobile,
         email,
         password,
-        confirmPassword,
         role,
         latitude,
         longitude,
@@ -78,13 +76,7 @@ module.exports = {
       // PASSWORD MATCH
       // ============================================================
 
-      if (password !== confirmPassword) {
-        return res.status(400).json({
-          success: false,
-          message:
-            'Password and confirm password do not match',
-        });
-      }
+    
 
       // ============================================================
       // NORMALIZE EMAIL / MOBILE

@@ -28,6 +28,12 @@ const providerProfileSchema = new mongoose.Schema(
         type: [Number], // [longitude, latitude]
         default: [0, 0],
       },
+      // 👇 THIS IS WHAT WAS MISSING 👇
+      name: {
+        type: String,
+        default: '',
+        trim: true
+      }
     },
     address: {
       type: String,

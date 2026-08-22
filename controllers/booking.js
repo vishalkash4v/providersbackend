@@ -36,26 +36,40 @@ const normalizeImagePaths = (images) => {
 };
 
 // ============================================================
-// NOTIFY MATCHING PROVIDERS
+// NOTIFY MATCHING PROVIDERS (WITH DETAILED LOGS)
 // ============================================================
 const notifyMatchingProviders = async (booking, isUpdate = false) => {
     try {
         console.log('\n=============================================');
         console.log('🛎️  STARTING PROVIDER MATCHING PROCESS');
+        console.log(`Booking ID: ${booking._id}`);
         
         const service = await Service.findById(booking.service);
-        if (!service) return;
+        if (!service) {
+            console.log('❌ Service not found. Exiting.');
+            return;
+        }
 
         // 0 = PENDING (Looking for providers)
-        if (booking.status !== 0 || !booking.isActive || booking.deletedAt) return;
+        if (booking.status !== 0 || !booking.isActive || booking.deletedAt) {
+            console.log('❌ Booking is not active/pending. Exiting.');
+            return;
+        }
 
-        if (!booking.location || !Array.isArray(booking.location.coordinates) || booking.location.coordinates.length !== 2) return;
+        if (!booking.location || !Array.isArray(booking.location.coordinates) || booking.location.coordinates.length !== 2) {
+            console.log('❌ Booking lacks valid location coordinates. Exiting.');
+            return;
+        }
 
         const [bookingLng, bookingLat] = booking.location.coordinates;
+        console.log(`📍 BOOKING LOCATION: [Lat: ${bookingLat}, Lng: ${bookingLng}]`);
+        console.log(`🛠️  REQUESTED SERVICE: ${service.name}`);
 
         const providerProfiles = await ProviderProfile.find({
             services: booking.service,
         }).populate('user', 'firstName lastName email mobile role isActive');
+
+        console.log(`🔍 Found ${providerProfiles.length} provider(s) globally who offer the service: '${service.name}'.`);
 
         const currentProviderIds = [];
         const providerDistances = new Map();
@@ -64,20 +78,46 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
             if (!profile.user || !profile.user.isActive) continue;
 
             const providerId = profile.user._id.toString();
-            if (providerId === booking.user.toString()) continue;
+            
+            if (providerId === booking.user.toString()) {
+                console.log(`\n⏩ Skipping: ${profile.user.firstName} (Customer cannot match their own booking)`);
+                continue;
+            }
 
-            if (!profile.location || !Array.isArray(profile.location.coordinates) || profile.location.coordinates.length !== 2) continue;
+            if (!profile.location || !Array.isArray(profile.location.coordinates) || profile.location.coordinates.length !== 2) {
+                console.log(`\n⏩ Skipping: ${profile.user.firstName} (Provider has no location set in work details)`);
+                continue;
+            }
 
             const [providerLng, providerLat] = profile.location.coordinates;
             const providerRadius = Number(profile.radius || 0);
 
             const distance = calculateDistance(bookingLat, bookingLng, providerLat, providerLng);
 
-            if (!Number.isFinite(providerRadius) || providerRadius <= 0 || distance > providerRadius) continue;
+            console.log(`\n👨‍🔧 Evaluating Provider: ${profile.user.firstName} ${profile.user.lastName} (${providerId})`);
+            console.log(`   - Provider Location: [Lat: ${providerLat}, Lng: ${providerLng}]`);
+            console.log(`   - Provider Radius: ${providerRadius} km`);
+            console.log(`   - Calculated Distance: ${distance.toFixed(2)} km`);
 
+            if (!Number.isFinite(providerRadius) || providerRadius <= 0) {
+                console.log(`   ❌ REJECTED: Provider has an invalid or zero radius.`);
+                continue;
+            }
+            
+            if (distance > providerRadius) {
+                const difference = (distance - providerRadius).toFixed(2);
+                console.log(`   ❌ REJECTED: Provider is too far away. (Exceeds radius by ${difference} km)`);
+                continue;
+            }
+
+            console.log(`   ✅ MATCHED: Provider is within range!`);
             currentProviderIds.push(providerId);
             providerDistances.set(providerId, distance);
         }
+
+        console.log('\n📋 --- MATCHING SUMMARY ---');
+        console.log(`✅ Total Eligible Providers Nearby: ${currentProviderIds.length}`);
+        console.log('=============================================\n');
 
         const oldProviderIds = (booking.notifiedProviders || []).map((id) => id.toString());
         const newProviderIds = currentProviderIds.filter((id) => !oldProviderIds.includes(id));
