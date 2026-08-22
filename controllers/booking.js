@@ -328,7 +328,7 @@ module.exports = {
                 status: 0, // 0 = Pending
             });
 
-            return res.status(201).json({ success: true, message: 'Offer submitted', data: offer });
+            return res.status(201).json({ success: true, message: 'Offer submitted' });
         } catch (error) {
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
