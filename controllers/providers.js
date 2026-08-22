@@ -1,6 +1,6 @@
 const ProviderProfile = require('../models/ProviderProfile');
 const Service = require('../models/Service');
-const User = require('../models/User');
+const User = require('../models/User'); // Required to fix the login location null issue
 const { validate } = require('../utils/fieldValidations');
 
 module.exports = {
@@ -28,6 +28,7 @@ module.exports = {
         latitude,
         longitude,
         address,
+        locationName, // Added locationName extraction
       } = req.body;
 
       // ============================================================
@@ -155,6 +156,11 @@ module.exports = {
         ],
       };
 
+      // Add locationName if provided
+      if (locationName && String(locationName).trim() !== '') {
+        location.name = String(locationName).trim();
+      }
+
       // ============================================================
       // ADDRESS
       // ============================================================
@@ -261,6 +267,7 @@ module.exports = {
         latitude,
         longitude,
         address,
+        locationName, // Added locationName extraction
       } = req.body;
 
       // ============================================================
@@ -361,21 +368,19 @@ module.exports = {
       // ============================================================
       const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
       const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
+      const hasLocationName = locationName !== undefined && locationName !== null && String(locationName).trim() !== '';
 
-      if (hasLatitude || hasLongitude) {
-        // Fallback to existing coordinates if only one is updated
+      // Trigger update if ANY location data is sent
+      if (hasLatitude || hasLongitude || hasLocationName) {
+        
         let currentLongitude = profile.location?.coordinates?.[0];
         let currentLatitude = profile.location?.coordinates?.[1];
+        let currentName = profile.location?.name;
 
-        if (hasLatitude) {
-          currentLatitude = Number(latitude);
-        }
+        if (hasLatitude) currentLatitude = Number(latitude);
+        if (hasLongitude) currentLongitude = Number(longitude);
+        if (hasLocationName) currentName = String(locationName).trim();
 
-        if (hasLongitude) {
-          currentLongitude = Number(longitude);
-        }
-
-        // Both coordinates must ultimately exist
         if (
           currentLatitude === undefined ||
           currentLatitude === null ||
@@ -384,7 +389,7 @@ module.exports = {
         ) {
           return res.status(400).json({
             success: false,
-            message: 'Both latitude and longitude are required when updating location',
+            message: 'Both latitude and longitude are required for a valid location',
           });
         }
 
@@ -409,10 +414,16 @@ module.exports = {
           });
         }
 
+        // Build new location object
         profile.location = {
           type: 'Point',
           coordinates: [currentLongitude, currentLatitude],
         };
+
+        // Re-attach the name if it exists
+        if (currentName) {
+          profile.location.name = currentName;
+        }
 
         // MIRROR LOCATION TO USER MODEL FOR LOGIN API
         await User.findByIdAndUpdate(userId, { location: profile.location });
