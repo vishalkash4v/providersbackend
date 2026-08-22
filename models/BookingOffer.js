@@ -5,7 +5,6 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // BOOKING
     // ============================================================
-
     booking: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Booking',
@@ -16,7 +15,6 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // PROVIDER
     // ============================================================
-
     provider: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -27,7 +25,6 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // PROVIDER OFFER AMOUNT
     // ============================================================
-
     offerAmount: {
       type: Number,
       required: true,
@@ -37,47 +34,21 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // OFFER STATUS
     // ============================================================
-
-    /*
-     * PENDING
-     * Provider has submitted offer.
-     *
-     * USER_ACCEPTED
-     * Customer accepted this provider's offer.
-     * Provider must now approve.
-     *
-     * PROVIDER_APPROVED
-     * Provider successfully approved.
-     * Booking is assigned to this provider.
-     *
-     * REJECTED
-     * Offer rejected.
-     *
-     * EXPIRED
-     * Approval window expired.
-     *
-     * CANCELLED
-     * Offer cancelled.
-     */
-
     status: {
-      type: String,
-      enum: [
-        'PENDING',
-        'USER_ACCEPTED',
-        'PROVIDER_APPROVED',
-        'REJECTED',
-        'EXPIRED',
-        'CANCELLED',
-      ],
-      default: 'PENDING',
-      index: true,
+        type: Number,
+        enum: [0, 1, 2, 3, 4, 5],
+        default: 0
+        // 0 = Pending (Offer sent to user)
+        // 1 = Accepted by User (Waiting for provider final approval)
+        // 2 = Rejected by User
+        // 3 = Accepted by Provider (Final confirmation, booking is now assigned)
+        // 4 = Rejected by Provider (Provider cancelled after user accepted)
+        // 5 = Offer Time Out (Provider didn't respond in time)
     },
 
     // ============================================================
     // USER ACCEPTED TIME
     // ============================================================
-
     userAcceptedAt: {
       type: Date,
       default: null,
@@ -86,7 +57,6 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // PROVIDER APPROVAL WINDOW
     // ============================================================
-
     providerApprovalExpiresAt: {
       type: Date,
       default: null,
@@ -95,7 +65,6 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // PROVIDER APPROVAL
     // ============================================================
-
     providerApprovedAt: {
       type: Date,
       default: null,
@@ -104,15 +73,6 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // JOB ACCESS TYPE
     // ============================================================
-
-    /*
-     * FREE_CREDIT
-     * Provider used one free booking credit.
-     *
-     * PAID
-     * Provider paid the job access fee.
-     */
-
     accessType: {
       type: String,
       enum: [
@@ -126,11 +86,6 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // JOB ACCESS FEE
     // ============================================================
-
-    /*
-     * Amount provider has to pay if no free credit exists.
-     */
-
     accessFee: {
       type: Number,
       default: 0,
@@ -140,11 +95,6 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // DISTANCE
     // ============================================================
-
-    /*
-     * Distance between provider and booking location.
-     */
-
     distanceKm: {
       type: Number,
       default: null,
@@ -154,7 +104,6 @@ const bookingOfferSchema = new mongoose.Schema(
     // ============================================================
     // PAYMENT
     // ============================================================
-
     paymentStatus: {
       type: String,
       enum: [
@@ -175,18 +124,19 @@ const bookingOfferSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    rejectionReason: {
+      type: String,
+      default: null,
+    },
   },
-
   {
     timestamps: true,
   }
 );
 
-
 // ============================================================
 // ONE OFFER PER PROVIDER FOR ONE BOOKING
 // ============================================================
-
 bookingOfferSchema.index(
   {
     booking: 1,
@@ -197,9 +147,4 @@ bookingOfferSchema.index(
   }
 );
 
-
-module.exports =
-  mongoose.model(
-    'BookingOffer',
-    bookingOfferSchema
-  );
+module.exports = mongoose.model('BookingOffer', bookingOfferSchema);

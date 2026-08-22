@@ -1,196 +1,47 @@
 const express = require('express');
-
 const router = express.Router();
-
 const bookingController = require('../controllers/booking');
-
 const { authenticateToken } = require('../middleware/jwt');
-
 const ensureDB = require('../middleware/db');
-
 
 // ============================================================
 // DATABASE MIDDLEWARE
 // ============================================================
-
 router.use(ensureDB);
 
+// ============================================================
+// BOOKING CRUD
+// ============================================================
+router.post('/booknow', authenticateToken, bookingController.createBooking);
+router.put('/update-booking/:id', authenticateToken, bookingController.updateBooking);
+router.delete('/delete/:id', authenticateToken, bookingController.deleteBooking);
 
 // ============================================================
-// CREATE BOOKING
+// FETCH BOOKINGS (UNIFIED)
 // ============================================================
-
-router.post(
-  '/booknow',
-  authenticateToken,
-  bookingController.createBooking
-);
-
+router.get('/my-bookings', authenticateToken, bookingController.getMyBookings);
+router.get('/details/:id', authenticateToken, bookingController.getBookingDetails);
 
 // ============================================================
-// UPDATE BOOKING
+// OFFERS MANAGEMENT
 // ============================================================
 
-router.put(
-  '/update-booking/:id',
-  authenticateToken,
-  bookingController.updateBooking
-);
+// Fetch all offers (or filter by ?bookingId=xyz)
+router.get('/offers', authenticateToken, bookingController.getOffers);
 
+// Provider: Create Offer
+router.post('/:id/offer', authenticateToken, bookingController.createBookingOffer);
 
-// ============================================================
-// DELETE BOOKING
-// ============================================================
+// User: Accept Offer
+router.patch('/offers/:offerId/accept', authenticateToken, bookingController.acceptBookingOffer);
 
-router.delete(
-  '/delete/:id',
-  authenticateToken,
-  bookingController.deleteBooking
-);
+// User: Reject Offer (Send { rejectionReason: "Too expensive" } in body)
+router.patch('/offers/:offerId/reject', authenticateToken, bookingController.rejectBookingOffer);
 
+// Provider: Final Approve (Confirms Job)
+router.patch('/offers/:offerId/approve', authenticateToken, bookingController.approveBookingOffer);
 
-// ============================================================
-// UPDATE BOOKING ACTIVE / INACTIVE STATUS
-// ============================================================
-
-router.patch(
-  '/status/:id',
-  authenticateToken,
-  bookingController.updateBookingStatus
-);
-
-
-// ============================================================
-// PROVIDER SEND OFFER
-// ============================================================
-//
-// Provider receives booking request and sends his offer amount.
-//
-// Example:
-// POST /api/booking/:id/offer
-//
-// Body:
-// {
-//   "offerAmount": 500
-// }
-//
-
-router.post(
-  '/:id/offer',
-  authenticateToken,
-  bookingController.createBookingOffer
-);
-
-
-// ============================================================
-// USER ACCEPT OFFER
-// ============================================================
-//
-// User can accept multiple provider offers.
-//
-// Example:
-// PATCH /api/booking/offers/:offerId/accept
-//
-
-router.patch(
-  '/offers/:offerId/accept',
-  authenticateToken,
-  bookingController.acceptBookingOffer
-);
-
-
-// ============================================================
-// PROVIDER APPROVE OFFER
-// ============================================================
-//
-// After user accepts provider offer,
-// provider gets approval request.
-//
-// At provider approval stage:
-// - Free booking credit is checked
-// - OR payment is required
-// - First successful provider approval wins
-//
-// Example:
-// PATCH /api/booking/offers/:offerId/approve
-//
-
-router.patch(
-  '/offers/:offerId/approve',
-  authenticateToken,
-  bookingController.approveBookingOffer
-);
-
-
-// ============================================================
-// PROVIDER PROPOSE VISIT TIME
-// ============================================================
-
-router.patch(
-  '/:id/propose-visit',
-  authenticateToken,
-  bookingController.proposeVisitTime
-);
-
-
-// ============================================================
-// USER ACCEPT VISIT TIME
-// ============================================================
-
-router.patch(
-  '/:id/accept-visit',
-  authenticateToken,
-  bookingController.acceptVisitTime
-);
-
-
-// ============================================================
-// USER COUNTER VISIT TIME
-// ============================================================
-
-router.patch(
-  '/:id/counter-visit',
-  authenticateToken,
-  bookingController.counterVisitTime
-);
-
-
-// ============================================================
-// PROVIDER ACCEPT COUNTER VISIT TIME
-// ============================================================
-
-router.patch(
-  '/:id/accept-counter-visit',
-  authenticateToken,
-  bookingController.acceptCounterVisitTime
-);
-
-
-// ============================================================
-// GET ALL BOOKINGS (UNIFIED FOR USER & PROVIDER)
-// ============================================================
-// Automatically filters by role (Customer/Provider).
-// Supports query params: ?type=new or ?status=pending
-// ============================================================
-
-router.get(
-  '/my-bookings',
-  authenticateToken,
-  bookingController.getMyBookings
-);
-
-
-// ============================================================
-// BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
-// ============================================================
-// Automatically strictly checks authorization based on role.
-// ============================================================
-
-router.get(
-  '/details/:id',
-  authenticateToken,
-  bookingController.getBookingDetails
-);
-
+// Provider: Cancel/Reject Offer (After user accepted)
+router.patch('/offers/:offerId/cancel', authenticateToken, bookingController.cancelBookingOffer);
 
 module.exports = router;

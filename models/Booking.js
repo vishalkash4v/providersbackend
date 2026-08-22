@@ -132,24 +132,14 @@ const bookingSchema = new mongoose.Schema(
         // BOOKING STATUS
         // ============================================================
 
-        status: {
-            type: String,
-
-            enum: [
-                'PENDING',
-                'PROVIDER_ACCEPTED',
-                'SCHEDULE_NEGOTIATION',
-                'CONFIRMED',
-                'IN_PROGRESS',
-                'COMPLETED',
-                'CANCELLED',
-                'DECLINED',
-                'EXPIRED',
-            ],
-
-            default: 'PENDING',
-            index: true,
-        },
+       status: {
+        type: Number,
+        enum: [0, 1, 2], 
+        default: 0
+        // 0 = Pending (Looking for providers)
+        // 1 = Assigned / In Progress (Provider confirmed the offer)
+        // 2 = Completed
+    },
 
         // ============================================================
         // ACTIVE / INACTIVE
