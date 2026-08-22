@@ -342,7 +342,8 @@ module.exports = {
         try {
             const { id } = req.params;
             const amount = Number(req.body.offerAmount);
-            const proposedDateTime = req.body.proposedDateTime; // Extract from body
+            const proposedDate = req.body.proposedDate; // Extract from body
+            const proposedTime = req.body.proposedTime; // Extract from body
 
             if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ success: false, message: 'Valid offerAmount is required' });
 
@@ -364,7 +365,8 @@ module.exports = {
                 booking: booking._id,
                 provider: req.user.id,
                 offerAmount: amount,
-                proposedDateTime: proposedDateTime ? String(proposedDateTime).trim() : null, // Save DateTime string here
+                proposedDate: proposedDate ? String(proposedDate).trim() : null, // Save DateTime string here
+                proposedTime: proposedTime ? String(proposedTime).trim() : null, // Save DateTime string here
                 distanceKm: Number(distanceKm.toFixed(2)),
                 status: 0, // 0 = Pending
             });
@@ -565,28 +567,52 @@ module.exports = {
         }
     },
 
-    getOffers: async (req, res) => {
+   getOffers: async (req, res) => {
         try {
             const { bookingId } = req.query;
             const role = Number(req.user.role);
             let query = {};
 
             if (role === 0) {
+                // User sees offers for their bookings
                 const userBookings = await Booking.find({ user: req.user.id }).distinct('_id');
                 query.booking = bookingId ? bookingId : { $in: userBookings };
             } else {
+                // Provider sees their own offers
                 query.provider = req.user.id;
                 if (bookingId) query.booking = bookingId;
             }
 
-            const offers = await BookingOffer.find(query)
+            // 1. Fetch offers
+            let offers = await BookingOffer.find(query)
                 .populate({
                     path: 'booking',
                     select: 'user service status address location deletedAt',
                     populate: { path: 'service', select: 'name image' }
                 })
                 .populate('provider', 'firstName lastName profileImage')
-                .sort({ createdAt: -1 });
+                .sort({ createdAt: -1 })
+                .lean(); // <--- lean() is important here
+
+            // 2. Extract Provider IDs
+            const providerIds = [...new Set(offers.map(offer => offer.provider?._id?.toString()).filter(Boolean))];
+
+            // 3. Fetch Provider Profiles in ONE query
+            const profiles = await ProviderProfile.find({ user: { $in: providerIds } }).select('user location').lean();
+
+            // 4. Create a quick Map
+            const locationMap = {};
+            profiles.forEach(profile => {
+                locationMap[profile.user.toString()] = profile.location;
+            });
+
+            // 5. Inject location into provider object
+            offers = offers.map(offer => {
+                if (offer.provider && offer.provider._id) {
+                    offer.provider.location = locationMap[offer.provider._id.toString()] || null;
+                }
+                return offer;
+            });
 
             return res.status(200).json({ success: true, count: offers.length, data: offers });
         } catch (error) {

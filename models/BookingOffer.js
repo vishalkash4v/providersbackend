@@ -32,7 +32,11 @@ const bookingOfferSchema = new mongoose.Schema(
     },
 
     // 👇 ONLY THIS NEW FIELD REQUIRED 👇
-    proposedDateTime: {
+    proposedDate: {
+        type: String,
+        default: null,
+    },
+    proposedTime: {     
         type: String,
         default: null,
     },
