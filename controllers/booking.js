@@ -619,6 +619,7 @@ module.exports = {
             
             let pendingOffersBookingIds = [];
             let providerOffers = [];
+            let providerProfileData = null; // Added for fast performance & strict filtering
 
             // ========================================================
             // 1. QUERY BUILDER
@@ -642,7 +643,7 @@ module.exports = {
                 pendingOffersBookingIds = pendingOffers.map(id => id.toString());
 
                 if (type === '0') {
-                    // Type 0: Open requests (No offers, OR only rejected offers, OR pending offers exist)
+                    // Type 0: Open requests
                     query.status = 0;
                     if (acceptedBookingIds.length > 0) query._id = { $nin: acceptedBookingIds };
                 }
@@ -658,18 +659,27 @@ module.exports = {
             }
             else if (role === 1) {
                 // ---------------- PROVIDER ----------------
+                // Fetch profile once to get exact services and location
+                providerProfileData = await ProviderProfile.findOne({ user: userId }).lean();
+                const mySelectedServices = providerProfileData?.services || [];
+
                 providerOffers = await BookingOffer.find({ provider: userId }).lean();
                 
                 // Filter ACTIVE offers only (0: Pending, 1: User Accepted, 3: Finalized)
-                // Rejected (2) or Cancelled (4) are ignored here!
                 const myActiveOfferBookingIds = providerOffers
                     .filter(o => [0, 1, 3].includes(o.status))
                     .map(o => o.booking.toString());
 
                 if (type === '0') {
-                    // Type 0: Open Requests. (If provider's offer was REJECTED, it SHOWS UP HERE again to resubmit!)
+                    // Type 0: Open Requests. 
                     query.notifiedProviders = userId;
                     query.status = 0;
+                    
+                    // 👉 STRICT FILTER: Only show bookings matching their current profile services
+                    if (mySelectedServices.length > 0) {
+                        query.service = { $in: mySelectedServices };
+                    }
+
                     if (myActiveOfferBookingIds.length > 0) query._id = { $nin: myActiveOfferBookingIds };
                 }
                 else if (type === '1') {
@@ -700,30 +710,28 @@ module.exports = {
                 .lean();
 
             // ========================================================
-            // 3. INJECT NEW STATUS & DISTANCE
+            // 3. INJECT NEW STATUS, DISTANCE, TIMER & OFFER ID
             // ========================================================
             if (role === 0) {
                 // --- CUSTOMER SIDE ---
                 bookings = bookings.map(booking => {
                     booking.distanceKm = null;
-
-                    // newStatus: 1 if there's a fresh Pending Offer waiting for User action
                     booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
-                    
-                    // 👉 ADDED: offerId as null for User
                     booking.offerId = null;
+                    
+                    // 👉 ADDED: Null for user
+                    booking.providerApprovalExpiresAt = null;
 
                     return booking;
                 });
 
             } else if (role === 1) {
                 // --- PROVIDER SIDE ---
-                const providerProfile = await ProviderProfile.findOne({ user: userId });
-
                 bookings = bookings.map(booking => {
                     let distanceKm = null;
-                    if (providerProfile?.location?.coordinates && booking.location?.coordinates) {
-                        const [pLng, pLat] = providerProfile.location.coordinates;
+                    
+                    if (providerProfileData?.location?.coordinates && booking.location?.coordinates) {
+                        const [pLng, pLat] = providerProfileData.location.coordinates;
                         const [bLng, bLat] = booking.location.coordinates;
                         distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
                     }
@@ -731,14 +739,14 @@ module.exports = {
 
                     const myOffer = providerOffers.find(o => o.booking.toString() === booking._id.toString());
                     
-                    // 👉 ADDED: inject offerId for Provider
                     booking.offerId = myOffer ? myOffer._id : null;
+
+                    // 👉 ADDED: Send actual timer if User Accepted (Status 1), otherwise null
+                    booking.providerApprovalExpiresAt = (myOffer && myOffer.status === 1) ? myOffer.providerApprovalExpiresAt : null;
                     
-                   if (type === '0') {
-                        // Type 0: Agar offer Rejected (2), Cancelled (4), ya Timeout (5) hai, toh newStatus = 1 kardo (Re-bid option)
+                    if (type === '0') {
                         booking.newStatus = (myOffer && [2, 4, 5].includes(myOffer.status)) ? 1 : 0;
                     } else if (type === '1') {
-                        // Type 1: If User Accepted (1), set newStatus = 1 (Means: "User accepted! Pay now")
                         booking.newStatus = (myOffer && myOffer.status === 1) ? 1 : 0;
                     } else {
                         booking.newStatus = 0;
