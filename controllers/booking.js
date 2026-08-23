@@ -597,7 +597,7 @@ module.exports = {
         }
     },
 
-    // ============================================================
+   // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -607,6 +607,10 @@ module.exports = {
             const role = Number(req.user.role);
 
             let query = { deletedAt: null };
+            
+            // Helper variables to track statuses globally for the mapping phase
+            let activeBookingIdsForUser = [];
+            let providerOffers = [];
 
             // ========================================================
             // 1. QUERY BUILDER
@@ -615,20 +619,23 @@ module.exports = {
                 // ---------------- CUSTOMER (USER) ----------------
                 query.user = userId;
 
-                // Get bookings that have AT LEAST ONE offer
-                const bookingsWithOffers = await BookingOffer.find({
-                    booking: { $in: await Booking.find({ user: userId }).distinct('_id') }
+                // Get bookings that have active offers (Pending 0, or User Accepted 1)
+                const activeOffers = await BookingOffer.find({
+                    booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
+                    status: { $in: [0, 1] } 
                 }).distinct('booking');
+
+                activeBookingIdsForUser = activeOffers.map(id => id.toString());
 
                 if (type === '0') {
                     // Type 0: Pending, NO offers yet
                     query.status = 0;
-                    if (bookingsWithOffers.length > 0) query._id = { $nin: bookingsWithOffers };
+                    if (activeOffers.length > 0) query._id = { $nin: activeOffers };
                 }
                 else if (type === '1') {
                     // Type 1: Pending, HAS offers (Bidding phase)
                     query.status = 0;
-                    query._id = { $in: bookingsWithOffers };
+                    query._id = { $in: activeOffers };
                 }
                 else if (type === '2') {
                     // Type 2: Confirmed / Provider Approved
@@ -637,8 +644,8 @@ module.exports = {
             }
             else if (role === 1) {
                 // ---------------- PROVIDER ----------------
-                const myOffers = await BookingOffer.find({ provider: userId }).lean();
-                const myOfferBookingIds = myOffers.map(offer => offer.booking);
+                providerOffers = await BookingOffer.find({ provider: userId }).lean();
+                const myOfferBookingIds = providerOffers.map(offer => offer.booking);
 
                 if (type === '0') {
                     // Type 0: Notified, but NO offer sent yet
@@ -648,8 +655,8 @@ module.exports = {
                 }
                 else if (type === '1') {
                     // Type 1: Offer sent (Pending 0, Accepted 1, Rejected 2)
-                    const activeOfferBookingIds = myOffers
-                        .filter(o => [0, 1, 2].includes(o.status)) // Sent, User Accepted, or User Rejected
+                    const activeOfferBookingIds = providerOffers
+                        .filter(o => [0, 1, 2].includes(o.status)) 
                         .map(o => o.booking);
                     query._id = { $in: activeOfferBookingIds };
                     query.status = 0; // Booking is still open
@@ -664,7 +671,7 @@ module.exports = {
             }
 
             // ========================================================
-            // 2. FETCH BOOKINGS (WITH FULL DETAILS)
+            // 2. FETCH BOOKINGS (WITHOUT HEAVY OFFER POPULATION)
             // ========================================================
             let bookings = await Booking.find(query)
                 .populate('service', 'name image')
@@ -673,43 +680,22 @@ module.exports = {
                 .sort({ createdAt: -1 })
                 .lean();
 
-            const bookingIds = bookings.map(b => b._id);
-
             // ========================================================
-            // 3. INJECT DATA (OFFERS ARRAY vs MYOFFER OBJECT)
+            // 3. INJECT NEW STATUS & DISTANCE (NO OFFER OBJECTS)
             // ========================================================
             if (role === 0) {
                 // --- CUSTOMER SIDE ---
-                // Fetch all relevant offers to embed
-                const allOffers = await BookingOffer.find({ booking: { $in: bookingIds } })
-                    .populate('provider', 'firstName lastName profileImage')
-                    .lean();
-
                 bookings = bookings.map(booking => {
                     booking.distanceKm = null;
 
-                    if (type === '1') {
-                        // Include ALL offers for this booking (Array)
-                        booking.offers = allOffers.filter(o => o.booking.toString() === booking._id.toString());
-                    } else if (type === '2') {
-                        // Booking is confirmed, only include the WINNING offer (Object)
-                        booking.acceptedOffer = allOffers.find(o =>
-                            o.booking.toString() === booking._id.toString() && o.status === 3
-                        ) || null;
-                    } else {
-                        // Type 0
-                        booking.offers = [];
-                    }
+                    // ⚡ newStatus: 1 if Provider sent offer & waiting for approval (Status 0 or 1)
+                    booking.newStatus = activeBookingIdsForUser.includes(booking._id.toString()) ? 1 : 0;
+                    
                     return booking;
                 });
 
             } else if (role === 1) {
                 // --- PROVIDER SIDE ---
-                const mySpecificOffers = await BookingOffer.find({
-                    booking: { $in: bookingIds },
-                    provider: userId
-                }).lean();
-
                 const providerProfile = await ProviderProfile.findOne({ user: userId });
 
                 bookings = bookings.map(booking => {
@@ -727,8 +713,9 @@ module.exports = {
 
                     booking.distanceKm = distanceKm;
 
-                    // Attach Single Object (Provider's own offer, or null if type=0)
-                    booking.myOffer = mySpecificOffers.find(o => o.booking.toString() === booking._id.toString()) || null;
+                    // ⚡ newStatus: 1 if User Accepted (1) or User Rejected (2)
+                    const myOffer = providerOffers.find(o => o.booking.toString() === booking._id.toString());
+                    booking.newStatus = (myOffer && (myOffer.status === 1 || myOffer.status === 2)) ? 1 : 0;
 
                     return booking;
                 });
