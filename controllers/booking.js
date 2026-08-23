@@ -734,9 +734,9 @@ module.exports = {
                     // 👉 ADDED: inject offerId for Provider
                     booking.offerId = myOffer ? myOffer._id : null;
                     
-                    if (type === '0') {
-                        // Type 0: If there is an offer and it's Rejected (2), set newStatus = 1 (Means: "Your offer was rejected, you can bid again")
-                        booking.newStatus = (myOffer && myOffer.status === 2) ? 1 : 0;
+                   if (type === '0') {
+                        // Type 0: Agar offer Rejected (2), Cancelled (4), ya Timeout (5) hai, toh newStatus = 1 kardo (Re-bid option)
+                        booking.newStatus = (myOffer && [2, 4, 5].includes(myOffer.status)) ? 1 : 0;
                     } else if (type === '1') {
                         // Type 1: If User Accepted (1), set newStatus = 1 (Means: "User accepted! Pay now")
                         booking.newStatus = (myOffer && myOffer.status === 1) ? 1 : 0;
