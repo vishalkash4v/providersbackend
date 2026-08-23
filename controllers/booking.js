@@ -597,11 +597,14 @@ module.exports = {
 
             // 1. Fetch offers
             let offers = await BookingOffer.find(query)
-                .populate({
-                    path: 'booking',
-                    select: 'user service status address location deletedAt',
-                    populate: { path: 'service', select: 'name image' }
-                })
+               .populate({
+    path: 'booking',
+    // 1. 'select' line ko poori tarah hata diya taaki FULL DETAILS jayein (images, description, etc.)
+    populate: [
+        { path: 'service', select: 'name image' },
+        { path: 'user', select: 'firstName lastName profileImage' } // 2. Customer ki photo aur naam bhi attach kar diya
+    ]
+})
                 .populate('provider', 'firstName lastName profileImage')
                 .sort({ createdAt: -1 })
                 .lean(); // <--- lean() is important here
