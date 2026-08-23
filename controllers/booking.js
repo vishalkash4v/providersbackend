@@ -299,8 +299,8 @@ module.exports = {
     // ============================================================
     // OFFERS MANAGEMENT
     // ============================================================
-    // ============================================================
-    // CREATE BOOKING OFFER
+   // ============================================================
+    // CREATE BOOKING OFFER (Supports Resubmission)
     // ============================================================
     createBookingOffer: async (req, res) => {
         try {
@@ -308,7 +308,6 @@ module.exports = {
             const amount = Number(req.body.offerAmount);
             const proposedDate = req.body.proposedDate;
             const proposedTime = req.body.proposedTime;
-            console.log(req.body, "body data for offer");
 
             if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ success: false, message: 'Valid offerAmount is required' });
 
@@ -318,24 +317,35 @@ module.exports = {
             const isProviderNotified = booking.notifiedProviders.some(pId => pId.toString() === req.user.id.toString());
             if (!isProviderNotified) return res.status(403).json({ success: false, message: 'You are not eligible for this booking' });
 
-            const existingOffer = await BookingOffer.findOne({ booking: booking._id, provider: req.user.id });
-            if (existingOffer) return res.status(400).json({ success: false, message: 'Offer already submitted' });
-
             const providerProfile = await ProviderProfile.findOne({ user: req.user.id });
             const [pLng, pLat] = providerProfile.location.coordinates;
             const [bLng, bLat] = booking.location.coordinates;
             const distanceKm = calculateDistance(bLat, bLng, pLat, pLng);
 
-            // --- DEBUG LOGS ---
-            console.log('\n=============================================');
-            console.log('📍 [API: Create Offer] DISTANCE CHECK');
-            console.log(`Booking ID: ${booking._id}`);
-            console.log(`   - Provider [Lng, Lat]: [${pLng}, ${pLat}]`);
-            console.log(`   - Booking  [Lng, Lat]: [${bLng}, ${bLat}]`);
-            console.log(`   - Calculated Distance: ${distanceKm.toFixed(2)} km`);
-            console.log('=============================================\n');
+            let offer = await BookingOffer.findOne({ booking: booking._id, provider: req.user.id });
+            
+            if (offer) {
+                // Agar offer pehle Reject(2), Cancel(4) ya Timeout(5) ho chuka hai, toh usko wapas Pending(0) kardo!
+                if ([2, 4, 5].includes(offer.status)) {
+                    offer.offerAmount = amount;
+                    offer.proposedDate = proposedDate ? String(proposedDate).trim() : null;
+                    offer.proposedTime = proposedTime ? String(proposedTime).trim() : null;
+                    offer.distanceKm = Number(distanceKm.toFixed(2));
+                    offer.status = 0; // Wapas Pending kar diya
+                    offer.rejectionReason = null; // Purana rejection clear kar diya
+                    offer.userAcceptedAt = null;
+                    offer.providerApprovalExpiresAt = null;
+                    await offer.save();
+                    
+                    return res.status(200).json({ success: true, message: 'Offer resubmitted successfully', data: offer });
+                } else {
+                    // Agar already 0 (Pending) ya 1 (Accepted) hai, toh error do
+                    return res.status(400).json({ success: false, message: 'You already have an active offer for this booking' });
+                }
+            }
 
-            const offer = await BookingOffer.create({
+            // Agar pehli baar offer bhej raha hai
+            offer = await BookingOffer.create({
                 booking: booking._id,
                 provider: req.user.id,
                 offerAmount: amount,
@@ -597,7 +607,7 @@ module.exports = {
         }
     },
 
-  // ============================================================
+// ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -608,7 +618,6 @@ module.exports = {
 
             let query = { deletedAt: null };
             
-            // Helper variables to track statuses globally for the mapping phase
             let pendingOffersBookingIds = [];
             let providerOffers = [];
 
@@ -619,24 +628,22 @@ module.exports = {
                 // ---------------- CUSTOMER (USER) ----------------
                 query.user = userId;
 
-                // Bookings where user has ALREADY ACCEPTED an offer (Offer status = 1)
+                // Bookings where user has ALREADY ACCEPTED an offer (Status = 1)
                 const acceptedOffers = await BookingOffer.find({
                     booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
                     status: 1 
                 }).distinct('booking');
-
                 const acceptedBookingIds = acceptedOffers.map(id => id.toString());
 
-                // Bookings where providers have SENT offers but NOT YET accepted (Offer status = 0)
+                // Bookings where providers have SENT offers but NOT YET accepted (Status = 0)
                 const pendingOffers = await BookingOffer.find({
                     booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
                     status: 0 
                 }).distinct('booking');
-
                 pendingOffersBookingIds = pendingOffers.map(id => id.toString());
 
                 if (type === '0') {
-                    // Type 0: Open requests (No offers, OR Offers received but NONE accepted yet)
+                    // Type 0: Open requests (No offers, OR only rejected offers, OR pending offers exist)
                     query.status = 0;
                     if (acceptedBookingIds.length > 0) query._id = { $nin: acceptedBookingIds };
                 }
@@ -653,24 +660,29 @@ module.exports = {
             else if (role === 1) {
                 // ---------------- PROVIDER ----------------
                 providerOffers = await BookingOffer.find({ provider: userId }).lean();
-                const myOfferBookingIds = providerOffers.map(offer => offer.booking);
+                
+                // Filter ACTIVE offers only (0: Pending, 1: User Accepted, 3: Finalized)
+                // Rejected (2) or Cancelled (4) are ignored here!
+                const myActiveOfferBookingIds = providerOffers
+                    .filter(o => [0, 1, 3].includes(o.status))
+                    .map(o => o.booking.toString());
 
                 if (type === '0') {
-                    // Type 0: Notified, but NO offer sent yet
+                    // Type 0: Open Requests. (If provider's offer was REJECTED, it SHOWS UP HERE again to resubmit!)
                     query.notifiedProviders = userId;
                     query.status = 0;
-                    if (myOfferBookingIds.length > 0) query._id = { $nin: myOfferBookingIds };
+                    if (myActiveOfferBookingIds.length > 0) query._id = { $nin: myActiveOfferBookingIds };
                 }
                 else if (type === '1') {
-                    // Type 1: Offer sent (Pending 0, Accepted 1, Rejected 2)
-                    const activeOfferBookingIds = providerOffers
-                        .filter(o => [0, 1, 2].includes(o.status)) 
-                        .map(o => o.booking);
-                    query._id = { $in: activeOfferBookingIds };
-                    query.status = 0; // Booking is still open
+                    // Type 1: Active Offer sent (Only Pending 0 or User Accepted 1)
+                    const activePendingBookingIds = providerOffers
+                        .filter(o => [0, 1].includes(o.status)) 
+                        .map(o => o.booking.toString());
+                    query._id = { $in: activePendingBookingIds };
+                    query.status = 0;
                 }
                 else if (type === '2') {
-                    // Type 2: Confirmed / Payment Done (Offer status 3)
+                    // Type 2: Confirmed
                     query.provider = userId;
                     query.status = 1;
                 }
@@ -679,7 +691,7 @@ module.exports = {
             }
 
             // ========================================================
-            // 2. FETCH BOOKINGS (WITHOUT HEAVY OFFER POPULATION)
+            // 2. FETCH BOOKINGS
             // ========================================================
             let bookings = await Booking.find(query)
                 .populate('service', 'name image')
@@ -689,16 +701,15 @@ module.exports = {
                 .lean();
 
             // ========================================================
-            // 3. INJECT NEW STATUS & DISTANCE (NO OFFER OBJECTS)
+            // 3. INJECT NEW STATUS & DISTANCE
             // ========================================================
             if (role === 0) {
                 // --- CUSTOMER SIDE ---
                 bookings = bookings.map(booking => {
                     booking.distanceKm = null;
 
-                    // ⚡ newStatus: 1 if Provider sent an offer and it is still pending (waiting for User action)
+                    // newStatus: 1 if there's a fresh Pending Offer waiting for User action
                     booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
-                    
                     return booking;
                 });
 
@@ -708,24 +719,24 @@ module.exports = {
 
                 bookings = bookings.map(booking => {
                     let distanceKm = null;
-
-                    // Safe Distance Calculation
-                    if (providerProfile && providerProfile.location && providerProfile.location.coordinates &&
-                        booking.location && booking.location.coordinates) {
-                        
-                        const providerLongitude = providerProfile.location.coordinates[0];
-                        const providerLatitude = providerProfile.location.coordinates[1];
-                        const bookingLongitude = booking.location.coordinates[0];
-                        const bookingLatitude = booking.location.coordinates[1];
-
-                        distanceKm = Number(calculateDistance(bookingLatitude, bookingLongitude, providerLatitude, providerLongitude).toFixed(2));
+                    if (providerProfile?.location?.coordinates && booking.location?.coordinates) {
+                        const [pLng, pLat] = providerProfile.location.coordinates;
+                        const [bLng, bLat] = booking.location.coordinates;
+                        distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
                     }
-
                     booking.distanceKm = distanceKm;
 
-                    // ⚡ newStatus: 1 if User Accepted (1) or User Rejected (2)
                     const myOffer = providerOffers.find(o => o.booking.toString() === booking._id.toString());
-                    booking.newStatus = (myOffer && (myOffer.status === 1 || myOffer.status === 2)) ? 1 : 0;
+                    
+                    if (type === '0') {
+                        // Type 0: If there is an offer and it's Rejected (2), set newStatus = 1 (Means: "Your offer was rejected, you can bid again")
+                        booking.newStatus = (myOffer && myOffer.status === 2) ? 1 : 0;
+                    } else if (type === '1') {
+                        // Type 1: If User Accepted (1), set newStatus = 1 (Means: "User accepted! Pay now")
+                        booking.newStatus = (myOffer && myOffer.status === 1) ? 1 : 0;
+                    } else {
+                        booking.newStatus = 0;
+                    }
 
                     return booking;
                 });
