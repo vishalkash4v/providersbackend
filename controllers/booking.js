@@ -606,7 +606,6 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
     },
-
 // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
@@ -710,6 +709,10 @@ module.exports = {
 
                     // newStatus: 1 if there's a fresh Pending Offer waiting for User action
                     booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
+                    
+                    // 👉 ADDED: offerId as null for User
+                    booking.offerId = null;
+
                     return booking;
                 });
 
@@ -727,6 +730,9 @@ module.exports = {
                     booking.distanceKm = distanceKm;
 
                     const myOffer = providerOffers.find(o => o.booking.toString() === booking._id.toString());
+                    
+                    // 👉 ADDED: inject offerId for Provider
+                    booking.offerId = myOffer ? myOffer._id : null;
                     
                     if (type === '0') {
                         // Type 0: If there is an offer and it's Rejected (2), set newStatus = 1 (Means: "Your offer was rejected, you can bid again")
