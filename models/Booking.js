@@ -128,18 +128,19 @@ const bookingSchema = new mongoose.Schema(
             default: null,
         },
 
-        // ============================================================
+      
+     // ============================================================
         // BOOKING STATUS
         // ============================================================
-
-       status: {
-        type: Number,
-        enum: [0, 1, 2], 
-        default: 0
-        // 0 = Pending (Looking for providers)
-        // 1 = Assigned / In Progress (Provider confirmed the offer)
-        // 2 = Completed
-    },
+        status: {
+            type: Number,
+            enum: [0, 1, 2, 3], 
+            default: 0
+            // 0 = Pending / Open (Providers sending offers, User reviewing. App covers both "No Offers" and "Has Offers" via API types)
+            // 1 = Assigned / Finalized (Winning Provider gave final approval & paid. The job is officially locked.)
+            // 2 = Completed (Physical work finished - for future use)
+            // 3 = Cancelled (User or Provider cancelled the booking entirely)
+        },
 
         // ============================================================
         // ACTIVE / INACTIVE

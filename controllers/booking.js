@@ -346,6 +346,7 @@ module.exports = {
             const amount = Number(req.body.offerAmount);
             const proposedDate = req.body.proposedDate;
             const proposedTime = req.body.proposedTime;
+            console.log(req.body, "body data for offer");
 
             if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ success: false, message: 'Valid offerAmount is required' });
 
@@ -631,7 +632,7 @@ module.exports = {
         }
     },
 
- // ============================================================
+// ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -642,34 +643,37 @@ module.exports = {
 
             let query = { deletedAt: null };
 
+            // ========================================================
+            // 1. BUILD QUERY BASED ON ROLE & TYPE
+            // ========================================================
             if (role === 0) {
+                // ---------------- USER LOGIC ----------------
                 query.user = userId;
-                if (type === '0') {
-                    const offeredBookingIds = await BookingOffer.find({
-                        booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
-                        status: { $in: [0, 1] }
-                    }).distinct('booking');
+                
+                // Get all bookings of this user that have active offers
+                const bookingsWithOffers = await BookingOffer.find({
+                    booking: { $in: await Booking.find({ user: userId }).distinct('_id') }
+                }).distinct('booking');
 
+                if (type === '0') {
+                    // Type 0: Pending - NO offers yet
                     query.status = 0;
-                    if (offeredBookingIds.length > 0) {
-                        query._id = { $nin: offeredBookingIds };
+                    if (bookingsWithOffers.length > 0) {
+                        query._id = { $nin: bookingsWithOffers };
                     }
                 } else if (type === '1') {
-                    const offeredBookingIds = await BookingOffer.find({
-                        booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
-                        status: { $in: [0, 1] }
-                    }).distinct('booking');
-
+                    // Type 1: Pending - HAS offers (Bidding in progress)
                     query.status = 0;
-                    query._id = { $in: offeredBookingIds };
-                } else if (type === '2') {
-                    query.status = { $in: [1, 2] };
+                    query._id = { $in: bookingsWithOffers };
                 } else if (type === '3') {
-                    delete query.deletedAt;
-                    query.deletedAt = { $ne: null };
+                    // Type 3: Finalized / Assigned
+                    query.status = 1; 
                 }
+
             } else if (role === 1) {
+                // ---------------- PROVIDER LOGIC ----------------
                 if (type === '0') {
+                    // Type 0: Notified, but NO offer sent yet
                     const myOffers = await BookingOffer.find({ provider: userId }).distinct('booking');
                     query.notifiedProviders = userId;
                     query.status = 0;
@@ -677,18 +681,27 @@ module.exports = {
                         query._id = { $nin: myOffers };
                     }
                 } else if (type === '1') {
-                    const myOffers = await BookingOffer.find({ provider: userId }).distinct('booking');
-                    query._id = { $in: myOffers };
-                } else if (type === '2') {
-                    query.provider = userId;
-                    query.status = { $in: [1, 2] };
+                    // Type 1: Offer sent, pending or user accepted
+                    const myPendingOffers = await BookingOffer.find({ 
+                        provider: userId, 
+                        status: { $in: [0, 1] } 
+                    }).distinct('booking');
+                    query._id = { $in: myPendingOffers };
+                    // Still looking for open bookings or assigned to me bookings
+                    query.status = { $in: [0, 1] }; 
                 } else if (type === '3') {
-                    const rejectedOffers = await BookingOffer.find({ 
+                    // Type 3: Finalized / Approved by Provider
+                    query.provider = userId;
+                    query.status = 1;
+                } else if (type === '4') {
+                    // Type 4: Rejected / Cancelled / Timeout Offers
+                    const myRejectedOffers = await BookingOffer.find({ 
                         provider: userId, 
                         status: { $in: [2, 4, 5] } 
                     }).distinct('booking');
-                    query._id = { $in: rejectedOffers };
+                    query._id = { $in: myRejectedOffers };
                 } else {
+                    // Default fallback
                     query.$or = [
                         { notifiedProviders: userId, status: 0 },
                         { provider: userId }
@@ -698,6 +711,9 @@ module.exports = {
                 return res.status(403).json({ success: false, message: 'Invalid role' });
             }
 
+            // ========================================================
+            // 2. FETCH BOOKINGS
+            // ========================================================
             let bookings = await Booking.find(query)
                 .populate('service', 'name image')
                 .populate('provider', 'firstName lastName mobile email profileImage')
@@ -705,45 +721,58 @@ module.exports = {
                 .sort({ createdAt: -1 })
                 .lean();
 
+            const bookingIds = bookings.map(b => b._id);
+
+            // ========================================================
+            // 3. INJECT DISTANCE & EMBED OFFERS
+            // ========================================================
             if (role === 0) {
+                // --- USER ---
+                // Fetch ALL offers for these bookings (to show in the array)
+                const allOffersForBookings = await BookingOffer.find({ booking: { $in: bookingIds } })
+                    .populate('provider', 'firstName lastName profileImage')
+                    .lean();
+
                 bookings = bookings.map(booking => {
-                    booking.distanceKm = null;
+                    booking.distanceKm = null; // Always null for user
+                    // Attach array of offers specifically for this booking
+                    booking.offers = allOffersForBookings.filter(offer => offer.booking.toString() === booking._id.toString());
                     return booking;
                 });
+
             } else if (role === 1) {
+                // --- PROVIDER ---
+                // Fetch ONLY this provider's offers
+                const mySpecificOffers = await BookingOffer.find({ 
+                    booking: { $in: bookingIds }, 
+                    provider: userId 
+                }).lean();
+
                 const providerProfile = await ProviderProfile.findOne({ user: userId });
-                
-                if (bookings.length > 0) {
-                    console.log('\n=============================================');
-                    console.log('📍 [API: My Bookings] DISTANCE CHECK BATCH');
-                }
 
                 bookings = bookings.map(booking => {
                     let distanceKm = null;
 
+                    // Distance Calculation (Fix applied: Lng at index 0, Lat at index 1)
                     if (providerProfile && providerProfile.location && providerProfile.location.coordinates &&
                         booking.location && booking.location.coordinates) {
                         
-                        const [pLng, pLat] = providerProfile.location.coordinates;
-                        const [bLng, bLat] = booking.location.coordinates;
+                        const providerLongitude = providerProfile.location.coordinates[0];
+                        const providerLatitude = providerProfile.location.coordinates[1];
                         
-                        distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
-
-                        // --- DEBUG LOGS ---
-                        console.log(`Booking ID: ${booking._id}`);
-                        console.log(`   - Provider [Lng, Lat]: [${pLng}, ${pLat}]`);
-                        console.log(`   - Booking  [Lng, Lat]: [${bLng}, ${bLat}]`);
-                        console.log(`   - Calculated Distance: ${distanceKm} km`);
-                        console.log('---------------------------------------------');
+                        const bookingLongitude = booking.location.coordinates[0];
+                        const bookingLatitude = booking.location.coordinates[1];
+                        
+                        distanceKm = Number(calculateDistance(bookingLatitude, bookingLongitude, providerLatitude, providerLongitude).toFixed(2));
                     }
 
                     booking.distanceKm = distanceKm;
+                    
+                    // Attach Single Object (Provider's own offer)
+                    booking.myOffer = mySpecificOffers.find(offer => offer.booking.toString() === booking._id.toString()) || null;
+                    
                     return booking;
                 });
-                
-                if (bookings.length > 0) {
-                    console.log('=============================================\n');
-                }
             }
 
             return res.status(200).json({
@@ -758,7 +787,6 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }
     },
-
     // ============================================================
     // BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
     // ============================================================
