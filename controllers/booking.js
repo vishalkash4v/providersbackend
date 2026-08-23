@@ -344,7 +344,8 @@ module.exports = {
         try {
             const { id } = req.params;
             const amount = Number(req.body.offerAmount);
-            const proposedDateTime = req.body.proposedDateTime;
+            const proposedDate = req.body.proposedDate;
+            const proposedTime = req.body.proposedTime;
 
             if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ success: false, message: 'Valid offerAmount is required' });
 
@@ -375,7 +376,8 @@ module.exports = {
                 booking: booking._id,
                 provider: req.user.id,
                 offerAmount: amount,
-                proposedDateTime: proposedDateTime ? String(proposedDateTime).trim() : null,
+                proposedDate: proposedDate ? String(proposedDate).trim() : null,
+                proposedTime: proposedTime ? String(proposedTime).trim() : null,
                 distanceKm: Number(distanceKm.toFixed(2)),
                 status: 0, // 0 = Pending
             });
