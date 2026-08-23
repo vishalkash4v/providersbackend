@@ -337,13 +337,14 @@ module.exports = {
     // ============================================================
     // OFFERS MANAGEMENT
     // ============================================================
-
+// ============================================================
+    // CREATE BOOKING OFFER
+    // ============================================================
     createBookingOffer: async (req, res) => {
         try {
             const { id } = req.params;
             const amount = Number(req.body.offerAmount);
-            const proposedDate = req.body.proposedDate; // Extract from body
-            const proposedTime = req.body.proposedTime; // Extract from body
+            const proposedDateTime = req.body.proposedDateTime;
 
             if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ success: false, message: 'Valid offerAmount is required' });
 
@@ -361,17 +362,25 @@ module.exports = {
             const [bLng, bLat] = booking.location.coordinates;
             const distanceKm = calculateDistance(bLat, bLng, pLat, pLng);
 
+            // --- DEBUG LOGS ---
+            console.log('\n=============================================');
+            console.log('📍 [API: Create Offer] DISTANCE CHECK');
+            console.log(`Booking ID: ${booking._id}`);
+            console.log(`   - Provider [Lng, Lat]: [${pLng}, ${pLat}]`);
+            console.log(`   - Booking  [Lng, Lat]: [${bLng}, ${bLat}]`);
+            console.log(`   - Calculated Distance: ${distanceKm.toFixed(2)} km`);
+            console.log('=============================================\n');
+
             const offer = await BookingOffer.create({
                 booking: booking._id,
                 provider: req.user.id,
                 offerAmount: amount,
-                proposedDate: proposedDate ? String(proposedDate).trim() : null, // Save DateTime string here
-                proposedTime: proposedTime ? String(proposedTime).trim() : null, // Save DateTime string here
+                proposedDateTime: proposedDateTime ? String(proposedDateTime).trim() : null,
                 distanceKm: Number(distanceKm.toFixed(2)),
                 status: 0, // 0 = Pending
             });
 
-            return res.status(201).json({ success: true, message: 'Offer submitted' });
+            return res.status(201).json({ success: true, message: 'Offer submitted', data: offer });
         } catch (error) {
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
@@ -620,7 +629,7 @@ module.exports = {
         }
     },
 
-  // ============================================================
+ // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -629,53 +638,36 @@ module.exports = {
             const userId = req.user.id;
             const role = Number(req.user.role);
 
-            let query = { deletedAt: null }; // Default to active bookings
+            let query = { deletedAt: null };
 
             if (role === 0) {
-                // ====================================================
-                // CUSTOMER LOGIC
-                // ====================================================
                 query.user = userId;
-
                 if (type === '0') {
-                    // TYPE 0: Pending bookings with NO OFFERS yet
                     const offeredBookingIds = await BookingOffer.find({
                         booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
-                        status: { $in: [0, 1] } // Has active offers
+                        status: { $in: [0, 1] }
                     }).distinct('booking');
 
                     query.status = 0;
                     if (offeredBookingIds.length > 0) {
-                        query._id = { $nin: offeredBookingIds }; // Exclude bookings that have offers
+                        query._id = { $nin: offeredBookingIds };
                     }
-
                 } else if (type === '1') {
-                    // TYPE 1: Pending bookings WITH OFFERS
                     const offeredBookingIds = await BookingOffer.find({
                         booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
-                        status: { $in: [0, 1] } // Has active offers
+                        status: { $in: [0, 1] }
                     }).distinct('booking');
 
                     query.status = 0;
-                    query._id = { $in: offeredBookingIds }; // ONLY include bookings that have offers
-
+                    query._id = { $in: offeredBookingIds };
                 } else if (type === '2') {
-                    // TYPE 2: Confirmed / Assigned Bookings
-                    // (Provider final approval done)
                     query.status = { $in: [1, 2] };
-
                 } else if (type === '3') {
-                    // TYPE 3: Soft Deleted / Cancelled Bookings
                     delete query.deletedAt;
                     query.deletedAt = { $ne: null };
                 }
-
             } else if (role === 1) {
-                // ====================================================
-                // PROVIDER LOGIC
-                // ====================================================
                 if (type === '0') {
-                    // TYPE 0: Pending / New Leads (Notified, but NO offer sent yet)
                     const myOffers = await BookingOffer.find({ provider: userId }).distinct('booking');
                     query.notifiedProviders = userId;
                     query.status = 0;
@@ -683,22 +675,18 @@ module.exports = {
                         query._id = { $nin: myOffers };
                     }
                 } else if (type === '1') {
-                    // TYPE 1: Bookings the provider has sent an offer for
                     const myOffers = await BookingOffer.find({ provider: userId }).distinct('booking');
                     query._id = { $in: myOffers };
                 } else if (type === '2') {
-                    // TYPE 2: Confirmed / Assigned to Provider
                     query.provider = userId;
                     query.status = { $in: [1, 2] };
                 } else if (type === '3') {
-                    // TYPE 3: Rejected / Cancelled / Timeout Offers
                     const rejectedOffers = await BookingOffer.find({ 
                         provider: userId, 
                         status: { $in: [2, 4, 5] } 
                     }).distinct('booking');
                     query._id = { $in: rejectedOffers };
                 } else {
-                    // Default All for Provider
                     query.$or = [
                         { notifiedProviders: userId, status: 0 },
                         { provider: userId }
@@ -708,7 +696,6 @@ module.exports = {
                 return res.status(403).json({ success: false, message: 'Invalid role' });
             }
 
-            // Execute the query
             let bookings = await Booking.find(query)
                 .populate('service', 'name image')
                 .populate('provider', 'firstName lastName mobile email profileImage')
@@ -716,18 +703,44 @@ module.exports = {
                 .sort({ createdAt: -1 })
                 .lean();
 
-            // Inject dynamic distance property for Providers
-            if (role === 1) {
-                const profile = await ProviderProfile.findOne({ user: userId });
-                if (profile && profile.location && profile.location.coordinates) {
-                    const [pLng, pLat] = profile.location.coordinates;
-                    bookings = bookings.map(b => {
-                        if (b.location && b.location.coordinates) {
-                            const [bLng, bLat] = b.location.coordinates;
-                            b.distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
-                        }
-                        return b;
-                    });
+            if (role === 0) {
+                bookings = bookings.map(booking => {
+                    booking.distanceKm = null;
+                    return booking;
+                });
+            } else if (role === 1) {
+                const providerProfile = await ProviderProfile.findOne({ user: userId });
+                
+                if (bookings.length > 0) {
+                    console.log('\n=============================================');
+                    console.log('📍 [API: My Bookings] DISTANCE CHECK BATCH');
+                }
+
+                bookings = bookings.map(booking => {
+                    let distanceKm = null;
+
+                    if (providerProfile && providerProfile.location && providerProfile.location.coordinates &&
+                        booking.location && booking.location.coordinates) {
+                        
+                        const [pLng, pLat] = providerProfile.location.coordinates;
+                        const [bLng, bLat] = booking.location.coordinates;
+                        
+                        distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
+
+                        // --- DEBUG LOGS ---
+                        console.log(`Booking ID: ${booking._id}`);
+                        console.log(`   - Provider [Lng, Lat]: [${pLng}, ${pLat}]`);
+                        console.log(`   - Booking  [Lng, Lat]: [${bLng}, ${bLat}]`);
+                        console.log(`   - Calculated Distance: ${distanceKm} km`);
+                        console.log('---------------------------------------------');
+                    }
+
+                    booking.distanceKm = distanceKm;
+                    return booking;
+                });
+                
+                if (bookings.length > 0) {
+                    console.log('=============================================\n');
                 }
             }
 
@@ -744,6 +757,9 @@ module.exports = {
         }
     },
 
+    // ============================================================
+    // BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
+    // ============================================================
     getBookingDetails: async (req, res) => {
         try {
             const { id } = req.params;
@@ -759,20 +775,38 @@ module.exports = {
             if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
             let hasAccess = false;
+            
             if (role === 0) {
                 hasAccess = booking.user && booking.user._id.toString() === userId;
+                booking.distanceKm = null; 
             } else if (role === 1) {
                 const isAssigned = booking.provider && booking.provider._id.toString() === userId;
                 const isNotified = booking.notifiedProviders && booking.notifiedProviders.some(pId => pId.toString() === userId);
                 hasAccess = isAssigned || isNotified;
 
                 if (hasAccess) {
-                    const profile = await ProviderProfile.findOne({ user: userId });
-                    if (profile && profile.location && profile.location.coordinates) {
-                        const [pLng, pLat] = profile.location.coordinates;
+                    const providerProfile = await ProviderProfile.findOne({ user: userId });
+                    let distanceKm = null;
+
+                    if (providerProfile && providerProfile.location && providerProfile.location.coordinates &&
+                        booking.location && booking.location.coordinates) {
+                        
+                        const [pLng, pLat] = providerProfile.location.coordinates;
                         const [bLng, bLat] = booking.location.coordinates;
-                        booking.distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
+                        
+                        distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
+
+                        // --- DEBUG LOGS ---
+                        console.log('\n=============================================');
+                        console.log('📍 [API: Booking Details] DISTANCE CHECK');
+                        console.log(`Booking ID: ${booking._id}`);
+                        console.log(`   - Provider [Lng, Lat]: [${pLng}, ${pLat}]`);
+                        console.log(`   - Booking  [Lng, Lat]: [${bLng}, ${bLat}]`);
+                        console.log(`   - Calculated Distance: ${distanceKm} km`);
+                        console.log('=============================================\n');
                     }
+                    
+                    booking.distanceKm = distanceKm;
                 }
             }
 
