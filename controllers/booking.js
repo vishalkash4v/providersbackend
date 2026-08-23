@@ -597,7 +597,7 @@ module.exports = {
         }
     },
 
-   // ============================================================
+  // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -609,7 +609,7 @@ module.exports = {
             let query = { deletedAt: null };
             
             // Helper variables to track statuses globally for the mapping phase
-            let activeBookingIdsForUser = [];
+            let pendingOffersBookingIds = [];
             let providerOffers = [];
 
             // ========================================================
@@ -619,23 +619,31 @@ module.exports = {
                 // ---------------- CUSTOMER (USER) ----------------
                 query.user = userId;
 
-                // Get bookings that have active offers (Pending 0, or User Accepted 1)
-                const activeOffers = await BookingOffer.find({
+                // Bookings where user has ALREADY ACCEPTED an offer (Offer status = 1)
+                const acceptedOffers = await BookingOffer.find({
                     booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
-                    status: { $in: [0, 1] } 
+                    status: 1 
                 }).distinct('booking');
 
-                activeBookingIdsForUser = activeOffers.map(id => id.toString());
+                const acceptedBookingIds = acceptedOffers.map(id => id.toString());
+
+                // Bookings where providers have SENT offers but NOT YET accepted (Offer status = 0)
+                const pendingOffers = await BookingOffer.find({
+                    booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
+                    status: 0 
+                }).distinct('booking');
+
+                pendingOffersBookingIds = pendingOffers.map(id => id.toString());
 
                 if (type === '0') {
-                    // Type 0: Pending, NO offers yet
+                    // Type 0: Open requests (No offers, OR Offers received but NONE accepted yet)
                     query.status = 0;
-                    if (activeOffers.length > 0) query._id = { $nin: activeOffers };
+                    if (acceptedBookingIds.length > 0) query._id = { $nin: acceptedBookingIds };
                 }
                 else if (type === '1') {
-                    // Type 1: Pending, HAS offers (Bidding phase)
+                    // Type 1: User Accepted an offer, waiting for Provider's final approval
                     query.status = 0;
-                    query._id = { $in: activeOffers };
+                    query._id = { $in: acceptedBookingIds };
                 }
                 else if (type === '2') {
                     // Type 2: Confirmed / Provider Approved
@@ -688,8 +696,8 @@ module.exports = {
                 bookings = bookings.map(booking => {
                     booking.distanceKm = null;
 
-                    // ⚡ newStatus: 1 if Provider sent offer & waiting for approval (Status 0 or 1)
-                    booking.newStatus = activeBookingIdsForUser.includes(booking._id.toString()) ? 1 : 0;
+                    // ⚡ newStatus: 1 if Provider sent an offer and it is still pending (waiting for User action)
+                    booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
                     
                     return booking;
                 });
@@ -702,7 +710,9 @@ module.exports = {
                     let distanceKm = null;
 
                     // Safe Distance Calculation
-                    if (providerProfile?.location?.coordinates && booking.location?.coordinates) {
+                    if (providerProfile && providerProfile.location && providerProfile.location.coordinates &&
+                        booking.location && booking.location.coordinates) {
+                        
                         const providerLongitude = providerProfile.location.coordinates[0];
                         const providerLatitude = providerProfile.location.coordinates[1];
                         const bookingLongitude = booking.location.coordinates[0];
