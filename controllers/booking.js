@@ -620,48 +620,85 @@ module.exports = {
         }
     },
 
+  // ============================================================
+    // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
+    // ============================================================
     getMyBookings: async (req, res) => {
         try {
             const { type } = req.query;
             const userId = req.user.id;
             const role = Number(req.user.role);
 
-            let query = { deletedAt: null };
+            let query = { deletedAt: null }; // Default to active bookings
 
             if (role === 0) {
+                // ====================================================
+                // CUSTOMER LOGIC
+                // ====================================================
                 query.user = userId;
 
                 if (type === '0') {
-                    query.status = 0;
-                } else if (type === '2') {
+                    // TYPE 0: Pending bookings with NO OFFERS yet
                     const offeredBookingIds = await BookingOffer.find({
                         booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
-                        status: { $in: [0, 1] }
+                        status: { $in: [0, 1] } // Has active offers
                     }).distinct('booking');
-                    query._id = { $in: offeredBookingIds };
+
                     query.status = 0;
-                } else if (type === '3') {
+                    if (offeredBookingIds.length > 0) {
+                        query._id = { $nin: offeredBookingIds }; // Exclude bookings that have offers
+                    }
+
+                } else if (type === '1') {
+                    // TYPE 1: Pending bookings WITH OFFERS
+                    const offeredBookingIds = await BookingOffer.find({
+                        booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
+                        status: { $in: [0, 1] } // Has active offers
+                    }).distinct('booking');
+
+                    query.status = 0;
+                    query._id = { $in: offeredBookingIds }; // ONLY include bookings that have offers
+
+                } else if (type === '2') {
+                    // TYPE 2: Confirmed / Assigned Bookings
+                    // (Provider final approval done)
                     query.status = { $in: [1, 2] };
-                } else if (type === '4') {
+
+                } else if (type === '3') {
+                    // TYPE 3: Soft Deleted / Cancelled Bookings
                     delete query.deletedAt;
                     query.deletedAt = { $ne: null };
                 }
+
             } else if (role === 1) {
+                // ====================================================
+                // PROVIDER LOGIC
+                // ====================================================
                 if (type === '0') {
+                    // TYPE 0: Pending / New Leads (Notified, but NO offer sent yet)
                     const myOffers = await BookingOffer.find({ provider: userId }).distinct('booking');
                     query.notifiedProviders = userId;
                     query.status = 0;
-                    query._id = { $nin: myOffers };
+                    if (myOffers.length > 0) {
+                        query._id = { $nin: myOffers };
+                    }
                 } else if (type === '1') {
+                    // TYPE 1: Bookings the provider has sent an offer for
                     const myOffers = await BookingOffer.find({ provider: userId }).distinct('booking');
                     query._id = { $in: myOffers };
                 } else if (type === '2') {
+                    // TYPE 2: Confirmed / Assigned to Provider
                     query.provider = userId;
                     query.status = { $in: [1, 2] };
                 } else if (type === '3') {
-                    const rejectedOffers = await BookingOffer.find({ provider: userId, status: { $in: [2, 4, 5] } }).distinct('booking');
+                    // TYPE 3: Rejected / Cancelled / Timeout Offers
+                    const rejectedOffers = await BookingOffer.find({ 
+                        provider: userId, 
+                        status: { $in: [2, 4, 5] } 
+                    }).distinct('booking');
                     query._id = { $in: rejectedOffers };
                 } else {
+                    // Default All for Provider
                     query.$or = [
                         { notifiedProviders: userId, status: 0 },
                         { provider: userId }
@@ -671,6 +708,7 @@ module.exports = {
                 return res.status(403).json({ success: false, message: 'Invalid role' });
             }
 
+            // Execute the query
             let bookings = await Booking.find(query)
                 .populate('service', 'name image')
                 .populate('provider', 'firstName lastName mobile email profileImage')
@@ -678,6 +716,7 @@ module.exports = {
                 .sort({ createdAt: -1 })
                 .lean();
 
+            // Inject dynamic distance property for Providers
             if (role === 1) {
                 const profile = await ProviderProfile.findOne({ user: userId });
                 if (profile && profile.location && profile.location.coordinates) {
