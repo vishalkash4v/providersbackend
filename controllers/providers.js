@@ -127,6 +127,8 @@ module.exports = {
         'longitude',
       ];
 
+      console.log("all data of body",req.body);
+
       if (validate(req, res, required)) return;
 
       const userId = req.user.id;
@@ -378,6 +380,9 @@ module.exports = {
         address,
         locationName, // Added locationName extraction
       } = req.body;
+
+      console.log("all data of body",req.body);
+
 
       // ============================================================
       // FIND PROFILE
