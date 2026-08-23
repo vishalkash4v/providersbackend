@@ -36,115 +36,53 @@ const normalizeImagePaths = (images) => {
 };
 
 // ============================================================
-// NOTIFY MATCHING PROVIDERS (WITH DETAILED LOGS)
+// NOTIFY MATCHING PROVIDERS (WITH DYNAMIC UPDATE MESSAGES)
 // ============================================================
-const notifyMatchingProviders = async (booking, isUpdate = false) => {
+const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage = null) => {
     try {
-        console.log('\n=============================================');
-        console.log('🛎️  STARTING PROVIDER MATCHING PROCESS');
-        console.log(`Booking ID: ${booking._id}`);
-
         const serviceId = booking.service?._id ? booking.service._id : booking.service;
         const service = await Service.findById(serviceId);
+        if (!service) return;
 
-        if (!service) {
-            console.log('❌ Service not found in database. Exiting.');
-            return;
-        }
-
-        // 0 = PENDING (Looking for providers)
-        if (booking.status !== 0 || !booking.isActive || booking.deletedAt) {
-            console.log(`❌ Booking is not active/pending. (status: ${booking.status}, isActive: ${booking.isActive}, deletedAt: ${booking.deletedAt}). Exiting.`);
-            return;
-        }
-
-        if (!booking.location || !Array.isArray(booking.location.coordinates) || booking.location.coordinates.length !== 2) {
-            console.log('❌ Booking lacks valid location coordinates. Exiting.');
-            return;
-        }
+        if (booking.status !== 0 || !booking.isActive || booking.deletedAt) return;
+        if (!booking.location || !Array.isArray(booking.location.coordinates) || booking.location.coordinates.length !== 2) return;
 
         const [bookingLng, bookingLat] = booking.location.coordinates;
-        console.log(`📍 BOOKING LOCATION: [Lat: ${bookingLat}, Lng: ${bookingLng}]`);
-        console.log(`🛠️  REQUESTED SERVICE: ${service.name} (${service._id})`);
 
-        // Find all profiles offering this service
         const providerProfiles = await ProviderProfile.find({
             services: new mongoose.Types.ObjectId(serviceId),
         }).populate('user', 'firstName lastName email mobile role isActive');
-
-        console.log(`🔍 Found ${providerProfiles.length} provider(s) globally offering '${service.name}'.`);
 
         const currentProviderIds = [];
         const providerDistances = new Map();
 
         for (const profile of providerProfiles) {
-            console.log('\n---------------------------------------------');
-
-            if (!profile.user) {
-                console.log(`⏩ Skipping Profile ID (${profile._id}): Linked user account does not exist.`);
-                continue;
-            }
-
-            console.log(`👨‍🔧 Evaluating Provider: ${profile.user.firstName} ${profile.user.lastName} (User ID: ${profile.user._id})`);
-
-            if (!profile.user.isActive) {
-                console.log(`   ❌ REJECTED: Provider user account is deactivated.`);
-                continue;
-            }
+            if (!profile.user || !profile.user.isActive) continue;
 
             const providerId = profile.user._id.toString();
             const customerId = booking.user?._id ? booking.user._id.toString() : booking.user.toString();
+            if (providerId === customerId) continue;
 
-            if (providerId === customerId) {
-                console.log(`   ❌ REJECTED: Provider is the creator of this booking (Customer cannot match their own booking).`);
-                continue;
-            }
-
-            if (!profile.location || !Array.isArray(profile.location.coordinates) || profile.location.coordinates.length !== 2) {
-                console.log(`   ❌ REJECTED: Provider has no location coordinates configured in Work Details.`);
-                continue;
-            }
+            if (!profile.location || !Array.isArray(profile.location.coordinates) || profile.location.coordinates.length !== 2) continue;
 
             const [providerLng, providerLat] = profile.location.coordinates;
             const providerRadius = Number(profile.radius || 0);
 
-            console.log(`   - Provider Location: [Lat: ${providerLat}, Lng: ${providerLng}]`);
-            console.log(`   - Provider Service Radius: ${providerRadius} km`);
-
-            // Check if coordinates are unconfigured default [0, 0]
-            if (providerLng === 0 && providerLat === 0) {
-                console.log(`   ❌ REJECTED: Provider coordinates are still set to default [0, 0]. Update Work Details location.`);
-                continue;
-            }
+            if (providerLng === 0 && providerLat === 0) continue;
 
             const distance = calculateDistance(bookingLat, bookingLng, providerLat, providerLng);
-            console.log(`   - Calculated Distance: ${distance.toFixed(2)} km`);
+            if (!Number.isFinite(providerRadius) || providerRadius <= 0 || distance > providerRadius) continue;
 
-            if (!Number.isFinite(providerRadius) || providerRadius <= 0) {
-                console.log(`   ❌ REJECTED: Provider radius is invalid (${providerRadius}).`);
-                continue;
-            }
-
-            if (distance > providerRadius) {
-                const difference = (distance - providerRadius).toFixed(2);
-                console.log(`   ❌ REJECTED: Out of range. (Exceeds radius by ${difference} km)`);
-                continue;
-            }
-
-            console.log(`   ✅ MATCHED: Provider is eligible and within service range!`);
             currentProviderIds.push(providerId);
             providerDistances.set(providerId, distance);
         }
-
-        console.log('\n=============================================');
-        console.log(`📋 MATCHING SUMMARY: ${currentProviderIds.length} Eligible Provider(s) Found`);
-        console.log('=============================================\n');
 
         const oldProviderIds = (booking.notifiedProviders || []).map((id) => id.toString());
         const newProviderIds = currentProviderIds.filter((id) => !oldProviderIds.includes(id));
         const existingProviderIds = currentProviderIds.filter((id) => oldProviderIds.includes(id));
         const removedProviderIds = oldProviderIds.filter((id) => !currentProviderIds.includes(id));
 
+        // 1. Notify completely NEW providers
         for (const providerId of newProviderIds) {
             const distance = providerDistances.get(providerId);
             try {
@@ -155,33 +93,33 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
                     message: `Someone is looking for ${service.name} approximately ${Number(distance).toFixed(1)} km from you.`,
                     bookingId: booking._id,
                     serviceId: service._id,
-                    distanceInKm: distance,
-                    data: { bookingId: String(booking._id), distance: String(distance) },
                 });
-            } catch (error) {
-                console.error(`Notification Error for Provider ${providerId}:`, error.message);
-            }
+            } catch (error) { }
         }
 
+        // 2. Notify EXISTING providers of UPDATES
         if (isUpdate) {
+            const defaultMsg = `The ${service.name} service request has been updated.`;
             for (const providerId of existingProviderIds) {
                 try {
                     await notifyUser({
                         userId: providerId,
                         type: 'BOOKING_UPDATED',
                         title: 'Booking Updated',
-                        message: `The ${service.name} service request has been updated.`,
+                        message: updateMessage || defaultMsg, // Custom message inserted here!
                         bookingId: booking._id,
                     });
                 } catch (error) { }
             }
+
+            // Notify providers who are no longer in range (e.g. location changed)
             for (const providerId of removedProviderIds) {
                 try {
                     await notifyUser({
                         userId: providerId,
                         type: 'BOOKING_UNAVAILABLE',
-                        title: 'Booking No Longer Available',
-                        message: `The ${service.name} request is no longer available in your radius.`,
+                        title: 'Booking Out of Range',
+                        message: `The ${service.name} request location was updated and is no longer in your radius.`,
                         bookingId: booking._id,
                     });
                 } catch (error) { }
@@ -195,20 +133,22 @@ const notifyMatchingProviders = async (booking, isUpdate = false) => {
     }
 };
 
-const notifyExistingProvidersUnavailable = async (booking) => {
+const notifyExistingProvidersUnavailable = async (booking, customMessage = null) => {
     try {
         const serviceId = booking.service?._id ? booking.service._id : booking.service;
         const service = await Service.findById(serviceId);
         if (!service) return;
 
         const providerIds = (booking.notifiedProviders || []).map((id) => id.toString());
+        const msg = customMessage || `The ${service.name} request has been cancelled or assigned.`;
+
         for (const providerId of providerIds) {
             try {
                 await notifyUser({
                     userId: providerId,
                     type: 'BOOKING_UNAVAILABLE',
-                    title: 'Booking No Longer Available',
-                    message: `The ${service.name} request has been cancelled or assigned.`,
+                    title: 'Booking Cancelled/Unavailable',
+                    message: msg,
                     bookingId: booking._id,
                 });
             } catch (error) { }
@@ -273,15 +213,34 @@ module.exports = {
             if (!booking || booking.deletedAt) return res.status(404).json({ success: false, message: 'Booking not found' });
             if (booking.status !== 0) return res.status(400).json({ success: false, message: 'Booking can only be updated while pending' });
 
-            if (req.body.description) booking.description = req.body.description;
-            if (req.body.address) booking.address = req.body.address;
+            // Detect what is changing to send the right notification
+            let updateMessage = 'The service request details have been updated by the customer.';
+
+            if (req.body.latitude || req.body.longitude || req.body.address) {
+                updateMessage = 'The location/address for the service request has been changed.';
+                if (req.body.latitude && req.body.longitude) {
+                    booking.location = { type: 'Point', coordinates: [Number(req.body.longitude), Number(req.body.latitude)] };
+                }
+                if (req.body.address) booking.address = req.body.address;
+            } else if (req.body.preferredDates || req.body.preferredTimeStart || req.body.preferredTimeEnd) {
+                updateMessage = 'The preferred date and time for the service request has been changed.';
+                if (req.body.preferredDates) booking.preferredDates = req.body.preferredDates;
+                if (req.body.preferredTimeStart) booking.preferredTimeStart = req.body.preferredTimeStart;
+                if (req.body.preferredTimeEnd) booking.preferredTimeEnd = req.body.preferredTimeEnd;
+            } else if (req.body.description || req.body.materialRequired !== undefined) {
+                updateMessage = 'The description or material requirements for the service request have been updated.';
+                if (req.body.description) booking.description = req.body.description;
+                if (req.body.materialRequired !== undefined) booking.materialRequired = req.body.materialRequired;
+            }
 
             await booking.save();
-            await notifyMatchingProviders(booking, true);
+
+            // Pass the custom message to the notification function
+            await notifyMatchingProviders(booking, true, updateMessage);
 
             return res.status(200).json({
                 success: true,
-                message: 'Your request has been updated and sent to nearby service providers. You can view details in My Bookings.'
+                message: 'Your request has been updated and nearby providers have been notified.',
             });
         } catch (error) {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
@@ -292,40 +251,41 @@ module.exports = {
         try {
             const booking = await Booking.findOne({ _id: req.params.id, user: req.user.id });
             if (!booking || booking.deletedAt) return res.status(404).json({ success: false, message: 'Booking not found' });
-
-            // Allow deletion unless the booking is already completed
-            if (booking.status === 2) return res.status(400).json({ success: false, message: 'Completed bookings cannot be deleted or cancelled' });
+            if (booking.status === 2) return res.status(400).json({ success: false, message: 'Completed bookings cannot be deleted' });
 
             const previousStatus = booking.status;
             const assignedProvider = booking.provider;
 
-            // Soft Delete the booking
+            // Soft Delete
             booking.isActive = false;
             booking.deletedAt = new Date();
             await booking.save();
 
-            // If the booking was already ASSIGNED (Status 1), notify that specific provider
             if (previousStatus === 1 && assignedProvider) {
+                // If it was already confirmed with a provider, notify them specifically
                 try {
                     await notifyUser({
                         userId: assignedProvider,
                         type: 'BOOKING_CANCELLED_BY_USER',
-                        title: 'Booking Cancelled',
+                        title: 'Confirmed Booking Cancelled',
                         message: 'The customer has cancelled the booking after it was assigned to you.',
                         bookingId: booking._id,
                     });
 
-                    // Mark their accepted offer as rejected/cancelled
                     await BookingOffer.findOneAndUpdate(
                         { booking: booking._id, provider: assignedProvider, status: 3 },
-                        { $set: { status: 2, rejectionReason: 'Customer cancelled the booking after assignment' } }
+                        { $set: { status: 2, rejectionReason: 'Customer cancelled the booking after confirmation' } }
                     );
-                } catch (error) {
-                    console.log("Failed to notify provider of cancellation");
-                }
+                } catch (error) { }
             } else {
-                // If it was still pending, notify all nearby providers that it's gone
-                await notifyExistingProvidersUnavailable(booking);
+                // If it was still pending, notify all notified providers
+                await notifyExistingProvidersUnavailable(booking, 'The customer has cancelled this service request.');
+
+                // Mark all pending offers for this booking as rejected
+                await BookingOffer.updateMany(
+                    { booking: booking._id, status: { $in: [0, 1] } },
+                    { $set: { status: 2, rejectionReason: 'Customer cancelled the service request' } }
+                );
             }
 
             return res.status(200).json({ success: true, message: 'Booking cancelled successfully' });
@@ -334,10 +294,12 @@ module.exports = {
         }
     },
 
+
+
     // ============================================================
     // OFFERS MANAGEMENT
     // ============================================================
-// ============================================================
+    // ============================================================
     // CREATE BOOKING OFFER
     // ============================================================
     createBookingOffer: async (req, res) => {
@@ -579,7 +541,7 @@ module.exports = {
         }
     },
 
-   getOffers: async (req, res) => {
+    getOffers: async (req, res) => {
         try {
             const { bookingId } = req.query;
             const role = Number(req.user.role);
@@ -597,14 +559,14 @@ module.exports = {
 
             // 1. Fetch offers
             let offers = await BookingOffer.find(query)
-               .populate({
-    path: 'booking',
-    // 1. 'select' line ko poori tarah hata diya taaki FULL DETAILS jayein (images, description, etc.)
-    populate: [
-        { path: 'service', select: 'name image' },
-        { path: 'user', select: 'firstName lastName profileImage' } // 2. Customer ki photo aur naam bhi attach kar diya
-    ]
-})
+                .populate({
+                    path: 'booking',
+                    // 1. 'select' line ko poori tarah hata diya taaki FULL DETAILS jayein (images, description, etc.)
+                    populate: [
+                        { path: 'service', select: 'name image' },
+                        { path: 'user', select: 'firstName lastName profileImage' } // 2. Customer ki photo aur naam bhi attach kar diya
+                    ]
+                })
                 .populate('provider', 'firstName lastName profileImage')
                 .sort({ createdAt: -1 })
                 .lean(); // <--- lean() is important here
@@ -635,7 +597,7 @@ module.exports = {
         }
     },
 
-// ============================================================
+    // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -647,75 +609,62 @@ module.exports = {
             let query = { deletedAt: null };
 
             // ========================================================
-            // 1. BUILD QUERY BASED ON ROLE & TYPE
+            // 1. QUERY BUILDER
             // ========================================================
             if (role === 0) {
-                // ---------------- USER LOGIC ----------------
+                // ---------------- CUSTOMER (USER) ----------------
                 query.user = userId;
-                
-                // Get all bookings of this user that have active offers
+
+                // Get bookings that have AT LEAST ONE offer
                 const bookingsWithOffers = await BookingOffer.find({
                     booking: { $in: await Booking.find({ user: userId }).distinct('_id') }
                 }).distinct('booking');
 
                 if (type === '0') {
-                    // Type 0: Pending - NO offers yet
+                    // Type 0: Pending, NO offers yet
                     query.status = 0;
-                    if (bookingsWithOffers.length > 0) {
-                        query._id = { $nin: bookingsWithOffers };
-                    }
-                } else if (type === '1') {
-                    // Type 1: Pending - HAS offers (Bidding in progress)
+                    if (bookingsWithOffers.length > 0) query._id = { $nin: bookingsWithOffers };
+                }
+                else if (type === '1') {
+                    // Type 1: Pending, HAS offers (Bidding phase)
                     query.status = 0;
                     query._id = { $in: bookingsWithOffers };
-                } else if (type === '3') {
-                    // Type 3: Finalized / Assigned
-                    query.status = 1; 
                 }
+                else if (type === '2') {
+                    // Type 2: Confirmed / Provider Approved
+                    query.status = 1;
+                }
+            }
+            else if (role === 1) {
+                // ---------------- PROVIDER ----------------
+                const myOffers = await BookingOffer.find({ provider: userId }).lean();
+                const myOfferBookingIds = myOffers.map(offer => offer.booking);
 
-            } else if (role === 1) {
-                // ---------------- PROVIDER LOGIC ----------------
                 if (type === '0') {
                     // Type 0: Notified, but NO offer sent yet
-                    const myOffers = await BookingOffer.find({ provider: userId }).distinct('booking');
                     query.notifiedProviders = userId;
                     query.status = 0;
-                    if (myOffers.length > 0) {
-                        query._id = { $nin: myOffers };
-                    }
-                } else if (type === '1') {
-                    // Type 1: Offer sent, pending or user accepted
-                    const myPendingOffers = await BookingOffer.find({ 
-                        provider: userId, 
-                        status: { $in: [0, 1] } 
-                    }).distinct('booking');
-                    query._id = { $in: myPendingOffers };
-                    // Still looking for open bookings or assigned to me bookings
-                    query.status = { $in: [0, 1] }; 
-                } else if (type === '3') {
-                    // Type 3: Finalized / Approved by Provider
+                    if (myOfferBookingIds.length > 0) query._id = { $nin: myOfferBookingIds };
+                }
+                else if (type === '1') {
+                    // Type 1: Offer sent (Pending 0, Accepted 1, Rejected 2)
+                    const activeOfferBookingIds = myOffers
+                        .filter(o => [0, 1, 2].includes(o.status)) // Sent, User Accepted, or User Rejected
+                        .map(o => o.booking);
+                    query._id = { $in: activeOfferBookingIds };
+                    query.status = 0; // Booking is still open
+                }
+                else if (type === '2') {
+                    // Type 2: Confirmed / Payment Done (Offer status 3)
                     query.provider = userId;
                     query.status = 1;
-                } else if (type === '4') {
-                    // Type 4: Rejected / Cancelled / Timeout Offers
-                    const myRejectedOffers = await BookingOffer.find({ 
-                        provider: userId, 
-                        status: { $in: [2, 4, 5] } 
-                    }).distinct('booking');
-                    query._id = { $in: myRejectedOffers };
-                } else {
-                    // Default fallback
-                    query.$or = [
-                        { notifiedProviders: userId, status: 0 },
-                        { provider: userId }
-                    ];
                 }
             } else {
                 return res.status(403).json({ success: false, message: 'Invalid role' });
             }
 
             // ========================================================
-            // 2. FETCH BOOKINGS
+            // 2. FETCH BOOKINGS (WITH FULL DETAILS)
             // ========================================================
             let bookings = await Booking.find(query)
                 .populate('service', 'name image')
@@ -727,28 +676,38 @@ module.exports = {
             const bookingIds = bookings.map(b => b._id);
 
             // ========================================================
-            // 3. INJECT DISTANCE & EMBED OFFERS
+            // 3. INJECT DATA (OFFERS ARRAY vs MYOFFER OBJECT)
             // ========================================================
             if (role === 0) {
-                // --- USER ---
-                // Fetch ALL offers for these bookings (to show in the array)
-                const allOffersForBookings = await BookingOffer.find({ booking: { $in: bookingIds } })
+                // --- CUSTOMER SIDE ---
+                // Fetch all relevant offers to embed
+                const allOffers = await BookingOffer.find({ booking: { $in: bookingIds } })
                     .populate('provider', 'firstName lastName profileImage')
                     .lean();
 
                 bookings = bookings.map(booking => {
-                    booking.distanceKm = null; // Always null for user
-                    // Attach array of offers specifically for this booking
-                    booking.offers = allOffersForBookings.filter(offer => offer.booking.toString() === booking._id.toString());
+                    booking.distanceKm = null;
+
+                    if (type === '1') {
+                        // Include ALL offers for this booking (Array)
+                        booking.offers = allOffers.filter(o => o.booking.toString() === booking._id.toString());
+                    } else if (type === '2') {
+                        // Booking is confirmed, only include the WINNING offer (Object)
+                        booking.acceptedOffer = allOffers.find(o =>
+                            o.booking.toString() === booking._id.toString() && o.status === 3
+                        ) || null;
+                    } else {
+                        // Type 0
+                        booking.offers = [];
+                    }
                     return booking;
                 });
 
             } else if (role === 1) {
-                // --- PROVIDER ---
-                // Fetch ONLY this provider's offers
-                const mySpecificOffers = await BookingOffer.find({ 
-                    booking: { $in: bookingIds }, 
-                    provider: userId 
+                // --- PROVIDER SIDE ---
+                const mySpecificOffers = await BookingOffer.find({
+                    booking: { $in: bookingIds },
+                    provider: userId
                 }).lean();
 
                 const providerProfile = await ProviderProfile.findOne({ user: userId });
@@ -756,24 +715,21 @@ module.exports = {
                 bookings = bookings.map(booking => {
                     let distanceKm = null;
 
-                    // Distance Calculation (Fix applied: Lng at index 0, Lat at index 1)
-                    if (providerProfile && providerProfile.location && providerProfile.location.coordinates &&
-                        booking.location && booking.location.coordinates) {
-                        
+                    // Safe Distance Calculation
+                    if (providerProfile?.location?.coordinates && booking.location?.coordinates) {
                         const providerLongitude = providerProfile.location.coordinates[0];
                         const providerLatitude = providerProfile.location.coordinates[1];
-                        
                         const bookingLongitude = booking.location.coordinates[0];
                         const bookingLatitude = booking.location.coordinates[1];
-                        
+
                         distanceKm = Number(calculateDistance(bookingLatitude, bookingLongitude, providerLatitude, providerLongitude).toFixed(2));
                     }
 
                     booking.distanceKm = distanceKm;
-                    
-                    // Attach Single Object (Provider's own offer)
-                    booking.myOffer = mySpecificOffers.find(offer => offer.booking.toString() === booking._id.toString()) || null;
-                    
+
+                    // Attach Single Object (Provider's own offer, or null if type=0)
+                    booking.myOffer = mySpecificOffers.find(o => o.booking.toString() === booking._id.toString()) || null;
+
                     return booking;
                 });
             }
@@ -808,10 +764,10 @@ module.exports = {
             if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
             let hasAccess = false;
-            
+
             if (role === 0) {
                 hasAccess = booking.user && booking.user._id.toString() === userId;
-                booking.distanceKm = null; 
+                booking.distanceKm = null;
             } else if (role === 1) {
                 const isAssigned = booking.provider && booking.provider._id.toString() === userId;
                 const isNotified = booking.notifiedProviders && booking.notifiedProviders.some(pId => pId.toString() === userId);
@@ -823,10 +779,10 @@ module.exports = {
 
                     if (providerProfile && providerProfile.location && providerProfile.location.coordinates &&
                         booking.location && booking.location.coordinates) {
-                        
+
                         const [pLng, pLat] = providerProfile.location.coordinates;
                         const [bLng, bLat] = booking.location.coordinates;
-                        
+
                         distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
 
                         // --- DEBUG LOGS ---
@@ -838,7 +794,7 @@ module.exports = {
                         console.log(`   - Calculated Distance: ${distanceKm} km`);
                         console.log('=============================================\n');
                     }
-                    
+
                     booking.distanceKm = distanceKm;
                 }
             }
