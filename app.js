@@ -3,7 +3,7 @@ require('dotenv').config();
 
 const express = require('express');
 const bodyParser = require('body-parser');
-
+const ensureDB = require('./middleware/db'); // 👉 Yeh line add karo
 const paymentController =
   require('./controllers/paymentController');
 const path = require('path');
@@ -47,6 +47,7 @@ const debug = require('debug')('providerbackend:server');
 
 app.post(
   '/api/payment/razorpay/webhook',
+  ensureDB,
   bodyParser.raw({
     type: 'application/json'
   }),
