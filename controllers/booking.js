@@ -619,7 +619,8 @@ module.exports = {
             
             let pendingOffersBookingIds = [];
             let providerOffers = [];
-            let providerProfileData = null; // Added for fast performance & strict filtering
+            let providerProfileData = null; 
+            let creditsLeft = null; // 👉 ADDED: Variable to hold credits
 
             // ========================================================
             // 1. QUERY BUILDER
@@ -628,14 +629,12 @@ module.exports = {
                 // ---------------- CUSTOMER (USER) ----------------
                 query.user = userId;
 
-                // Bookings where user has ALREADY ACCEPTED an offer (Status = 1)
                 const acceptedOffers = await BookingOffer.find({
                     booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
                     status: 1 
                 }).distinct('booking');
                 const acceptedBookingIds = acceptedOffers.map(id => id.toString());
 
-                // Bookings where providers have SENT offers but NOT YET accepted (Status = 0)
                 const pendingOffers = await BookingOffer.find({
                     booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
                     status: 0 
@@ -643,47 +642,42 @@ module.exports = {
                 pendingOffersBookingIds = pendingOffers.map(id => id.toString());
 
                 if (type === '0') {
-                    // Type 0: Open requests
                     query.status = 0;
                     if (acceptedBookingIds.length > 0) query._id = { $nin: acceptedBookingIds };
                 }
                 else if (type === '1') {
-                    // Type 1: User Accepted an offer, waiting for Provider's final approval
                     query.status = 0;
                     query._id = { $in: acceptedBookingIds };
                 }
                 else if (type === '2') {
-                    // Type 2: Confirmed / Provider Approved
                     query.status = 1;
                 }
             }
             else if (role === 1) {
                 // ---------------- PROVIDER ----------------
-                // Fetch profile once to get exact services and location
                 providerProfileData = await ProviderProfile.findOne({ user: userId }).lean();
                 const mySelectedServices = providerProfileData?.services || [];
 
+                // 👉 ADDED: Fetch provider's current booking credits
+                const providerUser = await User.findById(userId).select('bookingCredits').lean();
+                creditsLeft = Math.max(0, Number(providerUser?.bookingCredits || 0));
+
                 providerOffers = await BookingOffer.find({ provider: userId }).lean();
                 
-                // Filter ACTIVE offers only (0: Pending, 1: User Accepted, 3: Finalized)
                 const myActiveOfferBookingIds = providerOffers
                     .filter(o => [0, 1, 3].includes(o.status))
                     .map(o => o.booking.toString());
 
                 if (type === '0') {
-                    // Type 0: Open Requests. 
                     query.notifiedProviders = userId;
                     query.status = 0;
                     
-                    // 👉 STRICT FILTER: Only show bookings matching their current profile services
                     if (mySelectedServices.length > 0) {
                         query.service = { $in: mySelectedServices };
                     }
-
                     if (myActiveOfferBookingIds.length > 0) query._id = { $nin: myActiveOfferBookingIds };
                 }
                 else if (type === '1') {
-                    // Type 1: Active Offer sent (Only Pending 0 or User Accepted 1)
                     const activePendingBookingIds = providerOffers
                         .filter(o => [0, 1].includes(o.status)) 
                         .map(o => o.booking.toString());
@@ -691,7 +685,6 @@ module.exports = {
                     query.status = 0;
                 }
                 else if (type === '2') {
-                    // Type 2: Confirmed
                     query.provider = userId;
                     query.status = 1;
                 }
@@ -710,7 +703,7 @@ module.exports = {
                 .lean();
 
             // ========================================================
-            // 3. INJECT NEW STATUS, DISTANCE, TIMER & OFFER ID
+            // 3. INJECT DATA
             // ========================================================
             if (role === 0) {
                 // --- CUSTOMER SIDE ---
@@ -718,9 +711,8 @@ module.exports = {
                     booking.distanceKm = null;
                     booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
                     booking.offerId = null;
-                    
-                    // 👉 ADDED: Null for user
                     booking.providerApprovalExpiresAt = null;
+                    booking.creditsLeft = null; // 👉 ADDED: Null for user
 
                     return booking;
                 });
@@ -738,12 +730,12 @@ module.exports = {
                     booking.distanceKm = distanceKm;
 
                     const myOffer = providerOffers.find(o => o.booking.toString() === booking._id.toString());
-                    
                     booking.offerId = myOffer ? myOffer._id : null;
-
-                    // 👉 ADDED: Send actual timer if User Accepted (Status 1), otherwise null
                     booking.providerApprovalExpiresAt = (myOffer && myOffer.status === 1) ? myOffer.providerApprovalExpiresAt : null;
                     
+                    // 👉 ADDED: Inject actual credits left for provider
+                    booking.creditsLeft = creditsLeft;
+
                     if (type === '0') {
                         booking.newStatus = (myOffer && [2, 4, 5].includes(myOffer.status)) ? 1 : 0;
                     } else if (type === '1') {
