@@ -2,6 +2,10 @@ const createError = require('http-errors');
 require('dotenv').config();
 
 const express = require('express');
+const bodyParser = require('body-parser');
+
+const paymentController =
+  require('./controllers/paymentController');
 const path = require('path');
 const cookieParser = require('cookie-parser');
 const logger = require('morgan');
@@ -43,14 +47,10 @@ const debug = require('debug')('providerbackend:server');
 
 app.post(
   '/api/payment/razorpay/webhook',
-  (req, res) => {
-    console.log('🔥🔥 DIRECT WEBHOOK HIT');
-
-    return res.status(200).json({
-      success: true,
-      message: 'Direct webhook test successful'
-    });
-  }
+  bodyParser.raw({
+    type: 'application/json'
+  }),
+  paymentController.razorpayWebhook
 );
 
 
