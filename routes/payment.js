@@ -84,10 +84,7 @@ router.post(
 // /api/payment/razorpay/webhook
 //
 
-router.post(
-  '/razorpay/webhook',
-  paymentController.razorpayWebhook
-);
+
 
 
 // ============================================================

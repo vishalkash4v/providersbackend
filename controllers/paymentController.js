@@ -590,6 +590,7 @@ const verifyBookingPayment = async (req, res) => {
 // RAZORPAY WEBHOOK
 // ============================================================
 const razorpayWebhook = async (req, res) => {
+    console.log('Razorpay Webhook Received:', req.headers['x-razorpay-event'], req.headers['x-razorpay-event-id'], req.body.toString('utf8'),req.headers['x-razorpay-signature']);
     if (!isRealPaymentMode) {
         return res.status(200).json({ success: true, message: 'Webhook disabled because PAYMENT_MODE=false', paymentMode: 'DUMMY' });
     }

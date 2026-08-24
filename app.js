@@ -17,7 +17,8 @@ const authRouter = require('./routes/auth');
 const bookingRouter = require('./routes/booking');
 const paymentRouter = require('./routes/payment');
 const extrasRouter = require('./routes/extras');
-
+const paymentController =
+  require('./controllers/paymentController');
 const { connectDB } = require('./utils/db');
 
 const app = express();
@@ -96,11 +97,12 @@ app.use(
 //
 // ============================================================
 
-app.use(
+app.post(
   '/api/payment/razorpay/webhook',
   bodyParser.raw({
     type: 'application/json',
-  })
+  }),
+  paymentController.razorpayWebhook
 );
 
 
