@@ -584,38 +584,64 @@ const verifyBookingPayment = async (req, res) => {
 };
 
 // ============================================================
-// RAZORPAY WEBHOOK
-// ============================================================
-// ============================================================
-// RAZORPAY WEBHOOK
+// RAZORPAY WEBHOOK (WITH ADVANCED DEBUGGING)
 // ============================================================
 const razorpayWebhook = async (req, res) => {
-    console.log('Razorpay Webhook Received:', req.headers['x-razorpay-event'], req.headers['x-razorpay-event-id'], req.body.toString('utf8'),req.headers['x-razorpay-signature']);
+    console.log('--- 🚀 RAZORPAY WEBHOOK TRIGGERED ---');
+    
+    // 1. Log basic headers
+    const signature = req.headers['x-razorpay-signature'];
+    const eventId = req.headers['x-razorpay-event-id'];
+    console.log(`[Webhook] Event ID: ${eventId}`);
+    console.log(`[Webhook] Signature Received: ${signature ? 'YES' : 'NO'}`);
+
     if (!isRealPaymentMode) {
+        console.log('[Webhook] PAYMENT_MODE is false. Returning dummy success.');
         return res.status(200).json({ success: true, message: 'Webhook disabled because PAYMENT_MODE=false', paymentMode: 'DUMMY' });
     }
 
     try {
-        const signature = req.headers['x-razorpay-signature'];
-        if (!signature) return res.status(400).json({ success: false, message: 'Missing Razorpay webhook signature' });
+        // 2. Check Signature Presence
+        if (!signature) {
+            console.error('❌ [Webhook Error] Missing Razorpay webhook signature');
+            return res.status(400).json({ success: false, message: 'Missing Razorpay webhook signature' });
+        }
 
+        // 3. Check Secret Key in ENV
+        const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+        console.log(`[Webhook] Webhook Secret configured in ENV: ${secret ? 'YES (Length: ' + secret.length + ')' : 'NO (MISSING!)'}`);
+
+        // 4. Verify Signature
+        console.log('[Webhook] Verifying Signature...');
         const isValid = verifyWebhookSignature({ rawBody: req.body, signature });
-        if (!isValid) return res.status(400).json({ success: false, message: 'Invalid Razorpay webhook signature' });
+        
+        if (!isValid) {
+            console.error('❌ [Webhook Error] Signature Verification FAILED!');
+            console.error(`- Received Signature: ${signature}`);
+            // Note: We don't print expected signature for security, but failure means secret mismatch or body parsing issue.
+            return res.status(400).json({ success: false, message: 'Invalid Razorpay webhook signature' });
+        }
+        console.log('✅ [Webhook] Signature Verified Successfully!');
 
+        // 5. Parse Payload
         let eventBody;
         try {
-            eventBody = JSON.parse(req.body.toString('utf8'));
+            const bodyString = req.body.toString('utf8');
+            eventBody = JSON.parse(bodyString);
+            console.log(`[Webhook] Payload Parsed Successfully. Event Type: ${eventBody.event}`);
         } catch (parseError) {
+            console.error('❌ [Webhook Error] JSON Parsing FAILED:', parseError.message);
             return res.status(400).json({ success: false, message: 'Invalid webhook payload' });
         }
 
         const event = eventBody.event;
-        const eventId = req.headers['x-razorpay-event-id'] || null;
 
         // ====================================================
         // PAYMENT CAPTURED
         // ====================================================
         if (event === 'payment.captured' || event === 'order.paid') {
+            console.log(`[Webhook] Processing Event: ${event}`);
+            
             let orderId = null;
             let paymentId = null;
 
@@ -627,19 +653,33 @@ const razorpayWebhook = async (req, res) => {
                 paymentId = eventBody?.payload?.payment?.entity?.id;
             }
 
-            if (!orderId) return res.status(200).json({ success: true, message: 'Webhook received' });
+            console.log(`[Webhook] Order ID: ${orderId} | Payment ID: ${paymentId}`);
+
+            if (!orderId) {
+                console.log('⚠️ [Webhook] No Order ID found in payload, returning 200.');
+                return res.status(200).json({ success: true, message: 'Webhook received' });
+            }
 
             const payment = await BookingPayment.findOne({ razorpayOrderId: orderId });
-            if (!payment) return res.status(200).json({ success: true, message: 'Webhook received for unknown order' });
+            if (!payment) {
+                console.error(`❌ [Webhook Error] Unknown Order ID: ${orderId}`);
+                return res.status(200).json({ success: true, message: 'Webhook received for unknown order' });
+            }
 
-            // 👉 FIX: Don't just update statuses manually. Call the finalizer so booking gets assigned!
+            console.log('[Webhook] Payment Record Found in DB. Finalizing Booking...');
+
             payment.razorpayPaymentId = paymentId || payment.razorpayPaymentId;
             payment.webhookVerified = true;
             payment.webhookEvent = eventId ? `${event}:${eventId}` : event;
             await payment.save();
 
-            // Run the main transaction flow
             const result = await finalizeBookingPayment({ payment });
+
+            if (result.success) {
+                console.log('✅ [Webhook] Booking Finalized Successfully!');
+            } else {
+                console.error('❌ [Webhook Error] Booking Finalization Failed:', result.message);
+            }
 
             return res.status(200).json({ 
                 success: true, 
@@ -651,6 +691,8 @@ const razorpayWebhook = async (req, res) => {
         // PAYMENT FAILED
         // ====================================================
         if (event === 'payment.failed') {
+            console.log(`[Webhook] Processing Event: ${event}`);
+            // ... (Your existing failure handling code) ...
             const paymentId = eventBody?.payload?.payment?.entity?.id;
             const orderId = eventBody?.payload?.payment?.entity?.order_id;
             
@@ -659,6 +701,7 @@ const razorpayWebhook = async (req, res) => {
             if (!payment && paymentId) payment = await BookingPayment.findOne({ razorpayPaymentId: paymentId });
 
             if (payment) {
+                console.log('[Webhook] Updating payment status to FAILED in DB.');
                 payment.razorpayPaymentId = paymentId || payment.razorpayPaymentId;
                 payment.status = 'FAILED';
                 payment.failedAt = new Date();
@@ -667,21 +710,19 @@ const razorpayWebhook = async (req, res) => {
                 payment.failureReason = eventBody?.payload?.payment?.entity?.error_description || 'Razorpay payment failed';
                 await payment.save();
 
-                // If payment failed, do not finalize booking. Just mark offer payment status.
                 await BookingOffer.findByIdAndUpdate(payment.offer, { $set: { paymentStatus: 'FAILED' } });
             }
             return res.status(200).json({ success: true, message: 'Payment failure webhook received' });
         }
 
+        console.log(`[Webhook] Ignored Event: ${event}`);
         return res.status(200).json({ success: true, message: 'Webhook received' });
 
     } catch (error) {
-        console.error('Razorpay Webhook Error:', error);
-        // Always return 200 to Razorpay so it stops retrying the webhook
+        console.error('❌ [Webhook Critical Error]:', error);
         return res.status(200).json({ success: true, message: 'Webhook received but internal error occurred' });
     }
 };
-
 // ============================================================
 // GET PAYMENT STATUS
 // ============================================================
