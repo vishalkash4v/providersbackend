@@ -116,7 +116,7 @@ const refundLosingPayment = async ({ payment }) => {
 };
 
 // ============================================================
-// FINALIZE BOOKING (Called by Webhook or Dummy)
+// FINALIZE BOOKING (Called by Webhook, Live Sync or Dummy)
 // ============================================================
 const finalizeBookingPayment = async ({ payment }) => {
     if (!payment) return { success: false, message: 'Payment record not found' };
@@ -128,9 +128,9 @@ const finalizeBookingPayment = async ({ payment }) => {
     if (!booking) return { success: false, message: 'Booking not found' };
 
     // ========================================================
-    // ALREADY FINALIZED
+    // ALREADY FINALIZED (Early Exit)
     // ========================================================
-    if (offer.status === 3 && booking.provider && booking.provider.toString() === payment.provider.toString()) { // 3 = PROVIDER_APPROVED
+    if (offer.status === 3 && booking.provider && booking.provider.toString() === payment.provider.toString()) { 
         payment.status = 'PAID';
         if (!payment.paidAt) payment.paidAt = new Date();
         await payment.save();
@@ -138,7 +138,7 @@ const finalizeBookingPayment = async ({ payment }) => {
     }
 
     // ========================================================
-    // SOMEONE ELSE ALREADY WON
+    // SOMEONE ELSE ALREADY WON (Early Exit)
     // ========================================================
     if (booking.provider && booking.provider.toString() !== payment.provider.toString()) {
         offer.status = 2; // 2 = REJECTED
@@ -152,7 +152,7 @@ const finalizeBookingPayment = async ({ payment }) => {
     // ========================================================
     // OFFER MUST BE USER ACCEPTED
     // ========================================================
-    if (offer.status !== 1) { // 1 = USER_ACCEPTED
+    if (offer.status !== 1 && offer.status !== 3) { 
         return { success: false, message: 'This offer is no longer waiting for provider approval' };
     }
 
@@ -173,10 +173,37 @@ const finalizeBookingPayment = async ({ payment }) => {
                 providerAcceptedAt: new Date(),
             },
         },
-       { returnDocument: 'after' }
+        { returnDocument: 'after' }
     );
 
+    // ========================================================
+    // RACE CONDITION & REFUND LOGIC
+    // ========================================================
     if (!claimedBooking) {
+        // Agar atomic claim fail hua, check karo ki kisne jeeta!
+        const currentBooking = await Booking.findById(booking._id);
+        
+        // Agar same provider ko assign ho gaya hai kisi dusri thread (e.g. Webhook/Sync) se
+        if (currentBooking && currentBooking.provider && currentBooking.provider.toString() === payment.provider.toString()) {
+            console.log('⚡ [Race Condition Resolved] Booking already assigned to THIS provider by another thread. No refund needed.');
+            
+            payment.status = 'PAID';
+            payment.paidAt = payment.paidAt || new Date();
+            await payment.save();
+
+            offer.accessType = 'PAID';
+            offer.paymentStatus = 'PAID';
+            offer.providerApprovedAt = offer.providerApprovedAt || new Date();
+            offer.status = 3; // 3 = PROVIDER_APPROVED
+            offer.paymentId = payment.razorpayPaymentId || offer.paymentId;
+            offer.paymentPaidAt = payment.paidAt;
+            await offer.save();
+
+            return { success: true, booking: currentBooking, offer, payment };
+        }
+
+        // Agar waqai kisi dusre provider ne le liya hai, toh TABHI REFUND karo!
+        console.log('⚠️ [Refund Triggered] Booking actually lost to SOMEONE ELSE.');
         offer.status = 2; // 2 = REJECTED
         offer.rejectionReason = 'Lost to another provider during finalization';
         offer.paymentStatus = 'PAID';
@@ -186,7 +213,7 @@ const finalizeBookingPayment = async ({ payment }) => {
     }
 
     // ========================================================
-    // PAYMENT SUCCESS
+    // PAYMENT SUCCESS (Normally Claimed)
     // ========================================================
     payment.status = 'PAID';
     payment.paidAt = payment.paidAt || new Date();
