@@ -299,7 +299,7 @@ module.exports = {
     // ============================================================
     // OFFERS MANAGEMENT
     // ============================================================
-   // ============================================================
+    // ============================================================
     // CREATE BOOKING OFFER (Supports Resubmission)
     // ============================================================
     createBookingOffer: async (req, res) => {
@@ -323,7 +323,7 @@ module.exports = {
             const distanceKm = calculateDistance(bLat, bLng, pLat, pLng);
 
             let offer = await BookingOffer.findOne({ booking: booking._id, provider: req.user.id });
-            
+
             if (offer) {
                 // Agar offer pehle Reject(2), Cancel(4) ya Timeout(5) ho chuka hai, toh usko wapas Pending(0) kardo!
                 if ([2, 4, 5].includes(offer.status)) {
@@ -336,7 +336,7 @@ module.exports = {
                     offer.userAcceptedAt = null;
                     offer.providerApprovalExpiresAt = null;
                     await offer.save();
-                    
+
                     return res.status(200).json({ success: true, message: 'Offer resubmitted successfully', data: offer });
                 } else {
                     // Agar already 0 (Pending) ya 1 (Accepted) hai, toh error do
@@ -426,11 +426,60 @@ module.exports = {
             // ========================================================
             if (Number(provider.bookingCredits || 0) > 0) {
                 // Atomic booking claim to prevent race conditions
+                // ========================================================
+                // ATOMIC BOOKING CLAIM
+                // ========================================================
                 const claimedBooking = await Booking.findOneAndUpdate(
-                    { _id: booking._id, status: 0, isActive: true, provider: null, deletedAt: null },
-                    { $set: { provider: req.user.id, status: 1, providerAcceptedAt: new Date() } },
-                    { new: true }
+                    {
+                        _id: booking._id,
+                        status: 0, // 0 = PENDING
+                        isActive: true,
+                        provider: null,
+                    },
+                    {
+                        $set: {
+                            provider: payment.provider,
+                            status: 1, // 1 = ASSIGNED/FINALIZED
+                            providerAcceptedAt: new Date(),
+                        },
+                    },
+                    { returnDocument: 'after' }
                 );
+
+                // Agar claim fail hua (provider: null nahi tha)
+                if (!claimedBooking) {
+                    // 👇 NAYA CODE: Refund karne se pehle check karo ki booking kisko mili hai 👇
+                    const currentBooking = await Booking.findById(booking._id);
+
+                    // Agar same usi provider ko mili hai (kisi dusri API thread ke through), toh SUCCESS maano!
+                    if (currentBooking && currentBooking.provider && currentBooking.provider.toString() === payment.provider.toString()) {
+                        console.log('⚡ [Race Condition Resolved] Booking already assigned to THIS provider by another thread.');
+
+                        payment.status = 'PAID';
+                        payment.paidAt = payment.paidAt || new Date();
+                        await payment.save();
+
+                        offer.accessType = 'PAID';
+                        offer.paymentStatus = 'PAID';
+                        offer.providerApprovedAt = offer.providerApprovedAt || new Date();
+                        offer.status = 3; // 3 = PROVIDER_APPROVED
+                        offer.paymentId = payment.razorpayPaymentId || offer.paymentId;
+                        offer.paymentPaidAt = payment.paidAt;
+                        await offer.save();
+
+                        return { success: true, alreadyFinalized: true, booking: currentBooking, offer, payment };
+                    }
+                    // 👆 ===================================================================== 👆
+
+                    // Agar kisi sach mein dusre provider ko mili hai, TABHI refund karo!
+                    console.log('⚠️ [Refund Triggered] Booking lost to SOMEONE ELSE.');
+                    offer.status = 2; // 2 = REJECTED
+                    offer.rejectionReason = 'Lost to another provider during finalization';
+                    offer.paymentStatus = 'PAID';
+                    await offer.save();
+                    await refundLosingPayment({ payment });
+                    return { success: false, bookingAlreadyAssigned: true, message: 'Another provider has already been assigned this booking.' };
+                }
 
                 if (!claimedBooking) {
                     return res.status(409).json({ success: false, message: 'Another provider has already been assigned this booking' });
@@ -606,7 +655,7 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
     },
-// ============================================================
+    // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -615,12 +664,24 @@ module.exports = {
             const userId = req.user.id;
             const role = Number(req.user.role);
 
-            let query = { deletedAt: null };
-            
+            // 👇 1. AUTO-EXPIRE OFFERS (TIMEOUT LOGIC) 👇
+            // Agar kisi offer ka provider Approval time nikal chuka hai, toh usko 5 (Timeout) kar do.
+            await BookingOffer.updateMany({
+                status: 1,
+                providerApprovalExpiresAt: { $lt: new Date() }
+            }, {
+                $set: { status: 5 }
+            });
+            // 👆 ================================================== 👆
+
+            // 👇 2. CANCELLED BOOKINGS HIDE (isActive: true) 👇
+            let query = { deletedAt: null, isActive: true };
+            // 👆 ================================================== 👆
+
             let pendingOffersBookingIds = [];
             let providerOffers = [];
-            let providerProfileData = null; 
-            let creditsLeft = null; // 👉 ADDED: Variable to hold credits
+            let providerProfileData = null;
+            let creditsLeft = null;
 
             // ========================================================
             // 1. QUERY BUILDER
@@ -631,13 +692,13 @@ module.exports = {
 
                 const acceptedOffers = await BookingOffer.find({
                     booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
-                    status: 1 
+                    status: 1
                 }).distinct('booking');
                 const acceptedBookingIds = acceptedOffers.map(id => id.toString());
 
                 const pendingOffers = await BookingOffer.find({
                     booking: { $in: await Booking.find({ user: userId }).distinct('_id') },
-                    status: 0 
+                    status: 0
                 }).distinct('booking');
                 pendingOffersBookingIds = pendingOffers.map(id => id.toString());
 
@@ -658,12 +719,11 @@ module.exports = {
                 providerProfileData = await ProviderProfile.findOne({ user: userId }).lean();
                 const mySelectedServices = providerProfileData?.services || [];
 
-                // 👉 ADDED: Fetch provider's current booking credits
                 const providerUser = await User.findById(userId).select('bookingCredits').lean();
                 creditsLeft = Math.max(0, Number(providerUser?.bookingCredits || 0));
 
                 providerOffers = await BookingOffer.find({ provider: userId }).lean();
-                
+
                 const myActiveOfferBookingIds = providerOffers
                     .filter(o => [0, 1, 3].includes(o.status))
                     .map(o => o.booking.toString());
@@ -671,7 +731,7 @@ module.exports = {
                 if (type === '0') {
                     query.notifiedProviders = userId;
                     query.status = 0;
-                    
+
                     if (mySelectedServices.length > 0) {
                         query.service = { $in: mySelectedServices };
                     }
@@ -679,7 +739,7 @@ module.exports = {
                 }
                 else if (type === '1') {
                     const activePendingBookingIds = providerOffers
-                        .filter(o => [0, 1].includes(o.status)) 
+                        .filter(o => [0, 1].includes(o.status))
                         .map(o => o.booking.toString());
                     query._id = { $in: activePendingBookingIds };
                     query.status = 0;
@@ -705,13 +765,9 @@ module.exports = {
             // ========================================================
             // 3. INJECT DATA
             // ========================================================
-           // ========================================================
-            // 3. INJECT DATA
-            // ========================================================
             if (role === 0) {
                 // --- CUSTOMER SIDE ---
-                
-                // 👉 1. NAYA CHANGE: In bookings ke selected/approved offers DB se nikal rahe hain
+
                 const bookingIdsForUser = bookings.map(b => b._id);
                 const userActiveOffers = await BookingOffer.find({
                     booking: { $in: bookingIdsForUser },
@@ -719,23 +775,20 @@ module.exports = {
                 }).lean();
 
                 bookings = bookings.map(booking => {
-                    // 👉 2. Booking ka final selected/approved offer match karo
                     const finalOffer = userActiveOffers.find(o => o.booking.toString() === booking._id.toString());
 
                     booking.distanceKm = null;
                     booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
-                    
-                    // 👇 3. YAHAN FLAT KEYS ADD KI HAIN 👇
+
                     booking.offerId = finalOffer ? finalOffer._id : null;
                     booking.offerAmount = finalOffer ? finalOffer.offerAmount : null;
                     booking.proposedDate = finalOffer ? finalOffer.proposedDate : null;
                     booking.proposedTime = finalOffer ? finalOffer.proposedTime : null;
                     booking.accessFee = finalOffer ? finalOffer.accessFee : null;
-                    booking.offerStatus = finalOffer ? finalOffer.status : null; 
-                    // 👆 ================================= 👆
+                    booking.offerStatus = finalOffer ? finalOffer.status : null;
 
                     booking.providerApprovalExpiresAt = null;
-                    booking.creditsLeft = null; // User doesn't need credits
+                    booking.creditsLeft = null;
 
                     return booking;
                 });
@@ -744,7 +797,7 @@ module.exports = {
                 // --- PROVIDER SIDE ---
                 bookings = bookings.map(booking => {
                     let distanceKm = null;
-                    
+
                     if (providerProfileData?.location?.coordinates && booking.location?.coordinates) {
                         const [pLng, pLat] = providerProfileData.location.coordinates;
                         const [bLng, bLat] = booking.location.coordinates;
@@ -753,20 +806,16 @@ module.exports = {
                     booking.distanceKm = distanceKm;
 
                     const myOffer = providerOffers.find(o => o.booking.toString() === booking._id.toString());
-                    
-                    // 👉 ADDED: Poora offer object inject kar diya
-                    // booking.offer = myOffer || null; 
 
                     booking.offerId = myOffer ? myOffer._id : null;
                     booking.providerApprovalExpiresAt = (myOffer && myOffer.status === 1) ? myOffer.providerApprovalExpiresAt : null;
                     booking.creditsLeft = creditsLeft;
-                    // 👇 YAHAN SE NAYI KEYS ADD KI HAIN 👇
+
                     booking.offerAmount = myOffer ? myOffer.offerAmount : null;
                     booking.proposedDate = myOffer ? myOffer.proposedDate : null;
                     booking.proposedTime = myOffer ? myOffer.proposedTime : null;
                     booking.accessFee = myOffer ? myOffer.accessFee : null;
-                    booking.offerStatus = myOffer ? myOffer.status : null; 
-                    // 👆 YAHAN TAK 👆
+                    booking.offerStatus = myOffer ? myOffer.status : null;
 
                     if (type === '0') {
                         booking.newStatus = (myOffer && [2, 4, 5].includes(myOffer.status)) ? 1 : 0;
