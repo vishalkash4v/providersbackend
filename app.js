@@ -6,7 +6,6 @@ const path = require('path');
 const cookieParser = require('cookie-parser');
 const logger = require('morgan');
 const fileUpload = require('express-fileupload');
-const bodyParser = require('body-parser');
 const http = require('http');
 
 const indexRouter = require('./routes/index');
@@ -17,21 +16,59 @@ const authRouter = require('./routes/auth');
 const bookingRouter = require('./routes/booking');
 const paymentRouter = require('./routes/payment');
 const extrasRouter = require('./routes/extras');
-const paymentController =
-  require('./controllers/paymentController');
+
 const { connectDB } = require('./utils/db');
 
 const app = express();
 const debug = require('debug')('providerbackend:server');
 
-/**
- * Get port from environment and store in Express.
- */
+
+// ============================================================
+// 🔥 TEMPORARY RAZORPAY WEBHOOK TEST
+// ============================================================
+//
+// IMPORTANT:
+// This is ONLY a diagnostic test.
+//
+// We are intentionally NOT using:
+// - bodyParser.raw()
+// - paymentController
+// - paymentRouter
+// - ensureDB
+//
+// If Razorpay receives 200 from this route, we know the
+// Vercel/Express request path itself is working.
+//
+// ============================================================
+
+app.post(
+  '/api/payment/razorpay/webhook',
+  (req, res) => {
+
+    console.log('🔥🔥 DIRECT WEBHOOK HIT');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Direct webhook test successful'
+    });
+  }
+);
+
+
+// ============================================================
+// GET PORT
+// ============================================================
+
 const port = normalizePort(
   process.env.PORT || '3000'
 );
 
 app.set('port', port);
+
+
+// ============================================================
+// HTTP SERVER
+// ============================================================
 
 const server = http.createServer(app);
 
@@ -41,10 +78,12 @@ const server = http.createServer(app);
 // ============================================================
 
 connectDB().catch((err) => {
+
   console.error(
     'Failed to connect to MongoDB:',
     err.message
   );
+
 });
 
 
@@ -83,31 +122,15 @@ app.use(
 
 
 // ============================================================
-// RAZORPAY WEBHOOK
+// JSON BODY PARSER
 // ============================================================
 //
 // IMPORTANT:
+// We have temporarily removed the Razorpay raw-body
+// middleware from here.
 //
-// This route MUST receive the raw request body.
-// Razorpay webhook signature verification depends
-// on the original raw body.
+// This is intentional for the webhook diagnostic test.
 //
-// Therefore this route is registered BEFORE
-// express.json().
-//
-// ============================================================
-
-app.post(
-  '/api/payment/razorpay/webhook',
-  bodyParser.raw({
-    type: 'application/json',
-  }),
-  paymentController.razorpayWebhook
-);
-
-
-// ============================================================
-// JSON BODY PARSER
 // ============================================================
 
 app.use(
@@ -185,10 +208,25 @@ app.use(
   bookingRouter
 );
 
+
+// ============================================================
+// PAYMENT ROUTES
+// ============================================================
+//
+// NOTE:
+// The webhook route is already registered ABOVE.
+//
+// Therefore this router will handle the other payment
+// endpoints only.
+//
+// ============================================================
+
 app.use(
   '/api/payment',
   paymentRouter
 );
+
+
 app.use(
   '/api/extras',
   extrasRouter
@@ -213,9 +251,11 @@ app.use(
 
 app.use(
   function (req, res, next) {
+
     next(
       createError(404)
     );
+
   }
 );
 
@@ -231,13 +271,12 @@ app.use(
     res,
     next
   ) {
+
     res.locals.message =
       err.message;
 
     res.locals.error =
-      req.app.get(
-        'env'
-      ) === 'development'
+      req.app.get('env') === 'development'
         ? err
         : {};
 
@@ -248,6 +287,7 @@ app.use(
     res.render(
       'error'
     );
+
   }
 );
 
@@ -279,9 +319,8 @@ console.log(
 // NORMALIZE PORT
 // ============================================================
 
-function normalizePort(
-  val
-) {
+function normalizePort(val) {
+
   const port =
     parseInt(
       val,
@@ -291,16 +330,21 @@ function normalizePort(
   if (
     isNaN(port)
   ) {
+
     return val;
+
   }
 
   if (
     port >= 0
   ) {
+
     return port;
+
   }
 
   return false;
+
 }
 
 
@@ -308,29 +352,30 @@ function normalizePort(
 // SERVER ERROR
 // ============================================================
 
-function onError(
-  error
-) {
+function onError(error) {
+
   if (
-    error.syscall !==
-    'listen'
+    error.syscall !== 'listen'
   ) {
+
     throw error;
+
   }
 
   const bind =
-    typeof port ===
-    'string'
+    typeof port === 'string'
       ? 'Pipe ' + port
       : 'Port ' + port;
 
   switch (
     error.code
   ) {
+
     case 'EACCES':
+
       console.error(
         bind +
-          ' requires elevated privileges'
+        ' requires elevated privileges'
       );
 
       process.exit(
@@ -338,11 +383,13 @@ function onError(
       );
 
       break;
+
 
     case 'EADDRINUSE':
+
       console.error(
         bind +
-          ' is already in use'
+        ' is already in use'
       );
 
       process.exit(
@@ -351,9 +398,13 @@ function onError(
 
       break;
 
+
     default:
+
       throw error;
+
   }
+
 }
 
 
@@ -362,19 +413,20 @@ function onError(
 // ============================================================
 
 function onListening() {
+
   const addr =
     server.address();
 
   const bind =
-    typeof addr ===
-    'string'
+    typeof addr === 'string'
       ? 'pipe ' + addr
       : 'port ' + addr.port;
 
   debug(
     'Listening on ' +
-      bind
+    bind
   );
+
 }
 
 
