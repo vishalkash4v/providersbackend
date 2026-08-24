@@ -186,7 +186,7 @@ module.exports = {
                 workImages: normalizeImagePaths(req.body.images),
                 description: description ? description.trim() : '',
                 materialRequired: Boolean(materialRequired),
-                materialOption: materialOption || null,
+                materialOption: materialOption || "",
                 location: { type: 'Point', coordinates: [lng, lat] },
                 address: address ? address.trim() : '',
                 visitPreference: visitPreference || 'immediate',

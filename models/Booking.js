@@ -65,12 +65,8 @@ const bookingSchema = new mongoose.Schema(
         },
 
         materialOption: {
-            type: String,
-            enum: [
-                'user_has_material',
-                'provider_brings_material',
-            ],
-            default: null,
+            type: String,          
+            default: '',
         },
 
         // ============================================================
