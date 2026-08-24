@@ -173,7 +173,7 @@ const finalizeBookingPayment = async ({ payment }) => {
                 providerAcceptedAt: new Date(),
             },
         },
-        { new: true }
+       { returnDocument: 'after' }
     );
 
     if (!claimedBooking) {
