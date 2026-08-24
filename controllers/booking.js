@@ -705,14 +705,37 @@ module.exports = {
             // ========================================================
             // 3. INJECT DATA
             // ========================================================
+           // ========================================================
+            // 3. INJECT DATA
+            // ========================================================
             if (role === 0) {
                 // --- CUSTOMER SIDE ---
+                
+                // 👉 1. NAYA CHANGE: In bookings ke selected/approved offers DB se nikal rahe hain
+                const bookingIdsForUser = bookings.map(b => b._id);
+                const userActiveOffers = await BookingOffer.find({
+                    booking: { $in: bookingIdsForUser },
+                    status: { $in: [1, 3] } // 1 = User Accepted (Type 1), 3 = Provider Approved (Type 2)
+                }).lean();
+
                 bookings = bookings.map(booking => {
+                    // 👉 2. Booking ka final selected/approved offer match karo
+                    const finalOffer = userActiveOffers.find(o => o.booking.toString() === booking._id.toString());
+
                     booking.distanceKm = null;
                     booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
-                    booking.offerId = null;
+                    
+                    // 👇 3. YAHAN FLAT KEYS ADD KI HAIN 👇
+                    booking.offerId = finalOffer ? finalOffer._id : null;
+                    booking.offerAmount = finalOffer ? finalOffer.offerAmount : null;
+                    booking.proposedDate = finalOffer ? finalOffer.proposedDate : null;
+                    booking.proposedTime = finalOffer ? finalOffer.proposedTime : null;
+                    booking.accessFee = finalOffer ? finalOffer.accessFee : null;
+                    booking.offerStatus = finalOffer ? finalOffer.status : null; 
+                    // 👆 ================================= 👆
+
                     booking.providerApprovalExpiresAt = null;
-                    booking.creditsLeft = null; // 👉 ADDED: Null for user
+                    booking.creditsLeft = null; // User doesn't need credits
 
                     return booking;
                 });
@@ -730,11 +753,20 @@ module.exports = {
                     booking.distanceKm = distanceKm;
 
                     const myOffer = providerOffers.find(o => o.booking.toString() === booking._id.toString());
+                    
+                    // 👉 ADDED: Poora offer object inject kar diya
+                    // booking.offer = myOffer || null; 
+
                     booking.offerId = myOffer ? myOffer._id : null;
                     booking.providerApprovalExpiresAt = (myOffer && myOffer.status === 1) ? myOffer.providerApprovalExpiresAt : null;
-                    
-                    // 👉 ADDED: Inject actual credits left for provider
                     booking.creditsLeft = creditsLeft;
+                    // 👇 YAHAN SE NAYI KEYS ADD KI HAIN 👇
+                    booking.offerAmount = myOffer ? myOffer.offerAmount : null;
+                    booking.proposedDate = myOffer ? myOffer.proposedDate : null;
+                    booking.proposedTime = myOffer ? myOffer.proposedTime : null;
+                    booking.accessFee = myOffer ? myOffer.accessFee : null;
+                    booking.offerStatus = myOffer ? myOffer.status : null; 
+                    // 👆 YAHAN TAK 👆
 
                     if (type === '0') {
                         booking.newStatus = (myOffer && [2, 4, 5].includes(myOffer.status)) ? 1 : 0;
