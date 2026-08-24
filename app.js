@@ -44,7 +44,6 @@ const debug = require('debug')('providerbackend:server');
 app.post(
   '/api/payment/razorpay/webhook',
   (req, res) => {
-
     console.log('🔥🔥 DIRECT WEBHOOK HIT');
 
     return res.status(200).json({
