@@ -724,15 +724,55 @@ const razorpayWebhook = async (req, res) => {
     }
 };
 // ============================================================
-// GET PAYMENT STATUS
+// GET PAYMENT STATUS (WITH RAZORPAY LIVE SYNC)
 // ============================================================
 const getBookingPaymentStatus = async (req, res) => {
     try {
         const { offerId } = req.params;
-        const payment = await BookingPayment.findOne({ offer: offerId, provider: req.user.id }).sort({ createdAt: -1 });
+        
+        // 1. Database se payment nikaalo
+        let payment = await BookingPayment.findOne({ offer: offerId, provider: req.user.id }).sort({ createdAt: -1 });
 
         if (!payment) return res.status(404).json({ success: false, message: 'Payment not found' });
 
+        // 2. SMART SYNC: Agar real payment mode hai aur DB mein abhi tak Pending/Created hai
+        if (isRealPaymentMode && ['CREATED', 'PENDING'].includes(payment.status)) {
+            try {
+                // Razorpay server se is Order ID ke saare payments fetch karo
+                const orderPayments = await razorpay.orders.fetchPayments(payment.razorpayOrderId);
+                
+                if (orderPayments && orderPayments.items && orderPayments.items.length > 0) {
+                    // Check karo ki is order mein koi 'captured' (successful) payment hai kya
+                    const capturedPayment = orderPayments.items.find(p => p.status === 'captured');
+                    const failedPayment = orderPayments.items.find(p => p.status === 'failed');
+
+                    if (capturedPayment) {
+                        console.log('🔄 [Live Sync] Payment success found on Razorpay! Finalizing booking...');
+                        payment.razorpayPaymentId = capturedPayment.id;
+                        await payment.save();
+
+                        // Webhook aane se pehle hi humne khud finalize kar diya!
+                        const result = await finalizeBookingPayment({ payment });
+                        payment = result.payment || payment; 
+
+                    } else if (failedPayment) {
+                        console.log('🔄 [Live Sync] Payment failed on Razorpay. Updating DB...');
+                        payment.razorpayPaymentId = failedPayment.id;
+                        payment.status = 'FAILED';
+                        payment.failedAt = new Date();
+                        payment.failureReason = failedPayment.error_description || 'Razorpay payment failed';
+                        await payment.save();
+
+                        await BookingOffer.findByIdAndUpdate(payment.offer, { $set: { paymentStatus: 'FAILED' } });
+                    }
+                }
+            } catch (rzpError) {
+                console.error('⚠️ [Live Sync] Error syncing with Razorpay:', rzpError.message);
+                // Agar Razorpay API slow/down ho, tab bhi hum error nahi denge, bas purana DB status bhej denge.
+            }
+        }
+
+        // 3. Final verified status return karo
         return res.status(200).json({
             success: true,
             paymentMode: isRealPaymentMode ? 'RAZORPAY' : 'DUMMY',
@@ -742,7 +782,7 @@ const getBookingPaymentStatus = async (req, res) => {
                 offerId: payment.offer,
                 amount: payment.amount,
                 currency: payment.currency,
-                status: payment.status,
+                status: payment.status, // Yeh ab live updated status hoga!
                 razorpayOrderId: payment.razorpayOrderId,
                 razorpayPaymentId: payment.razorpayPaymentId,
                 paidAt: payment.paidAt,
