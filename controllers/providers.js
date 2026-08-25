@@ -620,4 +620,45 @@ module.exports = {
       });
     }
   },
+
+
+// ============================================================
+// GET REFERRAL STATS & LIST
+// ============================================================
+getReferrals: async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // 1. Get exact counts directly from DB
+        const pendingCount = await Referral.countDocuments({ referrer: userId, status: 'PENDING' });
+        const successCount = await Referral.countDocuments({ referrer: userId, status: 'SUCCESS' });
+        
+        // 2. Calculate total rewards earned so far
+        const successReferrals = await Referral.find({ referrer: userId, status: 'SUCCESS' }).lean();
+        const totalCreditsEarned = successReferrals.reduce((sum, ref) => sum + (Number(ref.rewardCredits) || 0), 0);
+
+        // 3. Get detailed list of all referred users with their basic profile info
+        const referralsList = await Referral.find({ referrer: userId })
+            .populate('referredProvider', 'firstName lastName profileImage createdAt') // Get details of joined user
+            .sort({ createdAt: -1 })
+            .lean();
+
+        return res.status(200).json({
+            success: true,
+            message: 'Referral stats fetched successfully',
+            data: {
+                stats: {
+                    totalReferrals: pendingCount + successCount,
+                    pending: pendingCount,
+                    success: successCount,
+                    totalCreditsEarned: totalCreditsEarned
+                },
+                list: referralsList
+            }
+        });
+    } catch (error) {
+        console.error('Get Referrals Error:', error);
+        return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
+    }
+}
 };
