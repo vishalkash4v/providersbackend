@@ -961,20 +961,7 @@ module.exports = {
       const token =
         generateToken(user);
 
-    // ============================================================
-      // SEND LOGIN SUCCESS PUSH NOTIFICATION
-      // ============================================================
-      try {
-        await notifyUser({
-          userId: user._id, 
-          type: 'LOGIN_SUCCESS',
-          title: 'Login Successful! 🎉', 
-          message: `Welcome back, ${user.firstName}! You have successfully logged in.`,
-          data: { action: 'login' } 
-        });
-      } catch (pushError) {
-        console.error('Login Push Error:', pushError);
-      }
+    
 
       // ============================================================
       // RESPONSE

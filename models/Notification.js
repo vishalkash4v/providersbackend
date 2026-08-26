@@ -19,11 +19,7 @@ const notificationSchema =
       // ==========================================================
 
       type: {
-        type: String,
-
-        enum: [
-         'LOGIN_SUCCESS', 'NEW_BOOKING_REQUEST', 'BOOKING_UPDATED', 'BOOKING_UNAVAILABLE', 'BOOKING_CANCELLED_BY_USER', 'NEW_OFFER_RECEIVED', 'OFFER_ACCEPTED', 'BOOKING_CONFIRMED', 'OFFER_WITHDRAWN'
-        ],
+        type: String,    
 
         required: true,
       },

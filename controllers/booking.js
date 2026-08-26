@@ -405,6 +405,14 @@ module.exports = {
             offer.status = 2; // 2 = Rejected by User
             if (req.body.rejectionReason) offer.rejectionReason = req.body.rejectionReason;
             await offer.save();
+            // Customer ne offer reject kiya, Provider ko batao
+            await notifyUser({
+                userId: offer.provider,
+                type: 'OFFER_REJECTED',
+                title: 'Offer Rejected ❌',
+                message: `The customer has rejected your offer.`,
+                bookingId: offer.booking._id
+            });
 
             return res.status(200).json({ success: true, message: 'Offer rejected' });
         } catch (error) {
