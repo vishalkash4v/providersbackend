@@ -354,6 +354,14 @@ module.exports = {
                 distanceKm: Number(distanceKm.toFixed(2)),
                 status: 0, // 0 = Pending
             });
+            // Provider ne offer bheja, Customer ko batao
+            await notifyUser({
+                userId: booking.user,
+                type: 'NEW_OFFER_RECEIVED',
+                title: 'New Offer Received! 💰',
+                message: `A provider has sent an offer of ₹${amount} for your service request.`,
+                bookingId: booking._id
+            });
 
             return res.status(201).json({ success: true, message: 'Offer submitted', data: offer });
         } catch (error) {
@@ -373,6 +381,14 @@ module.exports = {
             offer.userAcceptedAt = new Date();
             offer.providerApprovalExpiresAt = new Date(Date.now() + approvalMinutes * 60 * 1000);
             await offer.save();
+            // Customer ne accept kiya, Provider ko batao payment/final approval ke liye
+            await notifyUser({
+                userId: offer.provider,
+                type: 'OFFER_ACCEPTED',
+                title: 'Offer Accepted! 🎉',
+                message: `The customer has accepted your offer! Open the app to finalize the booking.`,
+                bookingId: offer.booking._id
+            });
 
             return res.status(200).json({ success: true, message: 'Offer accepted. Awaiting provider confirmation.' });
         } catch (error) {
@@ -533,6 +549,14 @@ module.exports = {
                 // Count referrals sent BY this provider that are still pending
                 const pendingReferrals = await Referral.countDocuments({ referrer: req.user.id, status: 'PENDING' });
 
+                // Provider ne final kar diya, Customer ko batao booking fix ho gayi
+                await notifyUser({
+                    userId: booking.user,
+                    type: 'BOOKING_CONFIRMED',
+                    title: 'Booking Confirmed! ✅',
+                    message: `The provider has confirmed your booking and will arrive at the scheduled time.`,
+                    bookingId: booking._id
+                });
                 return res.status(200).json({
                     success: true,
                     message: 'Booking confirmed successfully using free booking credit!',
@@ -593,6 +617,13 @@ module.exports = {
 
             offer.status = 4; // 4 = Rejected by Provider
             await offer.save();
+            await notifyUser({
+                userId: offer.booking.user,
+                type: 'OFFER_WITHDRAWN',
+                title: 'Offer Withdrawn ❌',
+                message: `A provider has withdrawn their offer for your booking.`,
+                bookingId: offer.booking._id
+            });
 
             return res.status(200).json({ success: true, message: 'Offer cancelled by provider' });
         } catch (error) {
