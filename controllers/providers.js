@@ -9,110 +9,134 @@ const { calculateDistance } = require('../utils/distance');
 module.exports = {
 
 
-  // ============================================================
-  // PROVIDER HOME DASHBOARD (ULTRA FAST)
-  // ============================================================
-  getProviderHome: async (req, res) => {
-    try {
-      const userId = req.user.id;
+// ============================================================
+    // PROVIDER DASHBOARD HOME API
+    // ============================================================
+    getProviderHome: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            
+            // Only providers can access this
+            if (Number(req.user.role) !== 1) {
+                return res.status(403).json({ success: false, message: 'Only providers can access this dashboard' });
+            }
 
-      // 1. Find what the provider has already offered on to exclude from new leads
-      const offeredBookingIds = await BookingOffer.find({ provider: userId }).distinct('booking');
+            // 👇 1. AUTO-EXPIRE OFFERS (TIMEOUT LOGIC) 👇
+            await BookingOffer.updateMany({
+                status: 1, 
+                providerApprovalExpiresAt: { $lt: new Date() } 
+            }, {
+                $set: { status: 5 } 
+            });
 
-      // 2. Run all heavy DB queries concurrently for maximum speed
-      const [
-        providerUser,
-        pendingReferrals,
-        providerProfile,
-        newBookings,
-        sentOffers,         // Offers provider just sent (waiting for user, status: 0)
-        actionRequiredOffers // Offers user accepted (waiting for provider, status: 1)
-      ] = await Promise.all([
-        User.findById(userId).select('bookingCredits bookingCreditsTotal').lean(),
-        Referral.countDocuments({ referrer: userId, status: 'PENDING' }),
-        ProviderProfile.findOne({ user: userId }).select('location').lean(),
-        
-        // NEW LEADS (Provider notified, but hasn't offered yet)
-        Booking.find({
-          notifiedProviders: userId,
-          status: 0,
-          deletedAt: null,
-          _id: { $nin: offeredBookingIds } // Exclude if offer already made
-        })
-        .populate('service', 'name image')
-        .populate('user', 'firstName lastName profileImage')
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .lean(),
+            // ========================================================
+            // FETCH PROVIDER DETAILS & STATS
+            // ========================================================
+            const providerProfileData = await ProviderProfile.findOne({ user: userId }).lean();
+            const mySelectedServices = providerProfileData?.services || [];
 
-        // NEW OFFERS (Sent by provider, pending user decision)
-        BookingOffer.find({ provider: userId, status: 0 })
-        .populate({
-          path: 'booking',
-          select: 'user service status address location deletedAt createdAt',
-          populate: [
-            { path: 'service', select: 'name image' },
-            { path: 'user', select: 'firstName lastName profileImage' }
-          ]
-        })
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .lean(),
+            const providerUser = await User.findById(userId).select('bookingCredits').lean();
+            const creditsLeft = Math.max(0, Number(providerUser?.bookingCredits || 0));
 
-        // PENDING OFFERS (User accepted, waiting for provider's final approval)
-        BookingOffer.find({ provider: userId, status: 1 })
-        .populate({
-          path: 'booking',
-          select: 'user service status address location deletedAt createdAt',
-          populate: [
-            { path: 'service', select: 'name image' },
-            { path: 'user', select: 'firstName lastName profileImage' }
-          ]
-        })
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .lean()
-      ]);
+            const pendingReferrals = await Referral.countDocuments({ referrer: userId, status: 'PENDING' });
+            
+            const providerOffers = await BookingOffer.find({ provider: userId }).lean();
 
-      // 3. Dynamically calculate distances for new bookings (Offers already have distanceKm saved)
-      if (providerProfile && providerProfile.location && providerProfile.location.coordinates) {
-        const [pLng, pLat] = providerProfile.location.coordinates;
-        
-        newBookings.forEach(b => {
-          if (b.location && b.location.coordinates) {
-            const [bLng, bLat] = b.location.coordinates;
-            b.distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
-          }
-        });
-      }
+            // ========================================================
+            // BUILD QUERIES
+            // ========================================================
+            const baseQuery = { deletedAt: null, isActive: true, status: 0 };
 
-      // 4. Calculate Stats
-      const creditsTotal = Number(providerUser?.bookingCreditsTotal || 0);
-      const creditsLeft = Number(providerUser?.bookingCredits || 0);
-      const creditsUsed = Math.max(0, creditsTotal - creditsLeft);
+            // -- For New Jobs (Type 0) --
+            const myActiveOfferBookingIds = providerOffers
+                .filter(o => [0, 1, 3].includes(o.status))
+                .map(o => o.booking.toString());
 
-      // 5. Response
-      return res.status(200).json({
-        success: true,
-        message: 'Provider home fetched successfully',
-        data: {
-          stats: {
-            freeBookingsLeft: creditsLeft,
-            freeBookingsUsed: creditsUsed,
-            freeBookingsTotal: creditsTotal,
-            pendingReferrals: pendingReferrals
-          },
-          actionRequiredOffers: actionRequiredOffers, // Limit 5 (User accepted, you need to approve)
-          newOffers: sentOffers,                      // Limit 5 (You offered, waiting for user)
-          newBookings: newBookings                    // Limit 5 (New leads nearby)
+            let newJobsQuery = { ...baseQuery, notifiedProviders: userId };
+            if (mySelectedServices.length > 0) newJobsQuery.service = { $in: mySelectedServices };
+            if (myActiveOfferBookingIds.length > 0) newJobsQuery._id = { $nin: myActiveOfferBookingIds };
+
+            // -- For Accepted Offers (Type 1) --
+            const activePendingBookingIds = providerOffers
+                .filter(o => o.status === 1) // Only accepted by user waiting for provider payment
+                .map(o => o.booking.toString());
+            
+            let acceptedOffersQuery = { ...baseQuery, _id: { $in: activePendingBookingIds } };
+
+            // ========================================================
+            // FETCH BOTH ARRAYS IN PARALLEL (For Max Speed)
+            // ========================================================
+            let [newJobs, acceptedOffers] = await Promise.all([
+                Booking.find(newJobsQuery)
+                    .populate('service', 'name image')
+                    .populate('user', 'firstName lastName mobile email profileImage')
+                    .sort({ createdAt: -1 }).lean(),
+                Booking.find(acceptedOffersQuery)
+                    .populate('service', 'name image')
+                    .populate('user', 'firstName lastName mobile email profileImage')
+                    .sort({ createdAt: -1 }).lean()
+            ]);
+
+            // ========================================================
+            // INJECT DATA HELPER FUNCTION
+            // ========================================================
+            const injectOfferData = (booking, typeFlag) => {
+                let distanceKm = null;
+                if (providerProfileData?.location?.coordinates && booking.location?.coordinates) {
+                    const [pLng, pLat] = providerProfileData.location.coordinates;
+                    const [bLng, bLat] = booking.location.coordinates;
+                    distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
+                }
+                booking.distanceKm = distanceKm;
+
+                const myOffer = providerOffers.find(o => o.booking.toString() === booking._id.toString());
+
+                booking.offerId = myOffer ? myOffer._id : null;
+                booking.providerApprovalExpiresAt = (myOffer && myOffer.status === 1) ? myOffer.providerApprovalExpiresAt : null;
+                booking.creditsLeft = creditsLeft;
+                
+                booking.offerAmount = myOffer ? myOffer.offerAmount : null;
+                booking.proposedDate = myOffer ? myOffer.proposedDate : null;
+                booking.proposedTime = myOffer ? myOffer.proposedTime : null;
+                booking.accessFee = myOffer ? myOffer.accessFee : null;
+                booking.offerStatus = myOffer ? myOffer.status : null; 
+
+                if (typeFlag === '0') {
+                    booking.newStatus = (myOffer && [2, 4, 5].includes(myOffer.status)) ? 1 : 0;
+                } else {
+                    booking.newStatus = (myOffer && myOffer.status === 1) ? 1 : 0;
+                }
+
+                return booking;
+            };
+
+            // Apply injection
+            newJobs = newJobs.map(job => injectOfferData(job, '0'));
+            acceptedOffers = acceptedOffers.map(job => injectOfferData(job, '1'));
+
+            // ========================================================
+            // FINAL RESPONSE
+            // ========================================================
+            return res.status(200).json({
+                success: true,
+                message: 'Provider home dashboard fetched successfully',
+                data: {
+                    stats: {
+                        creditsLeft: creditsLeft,
+                        pendingReferrals: pendingReferrals,
+                        newJobsCount: newJobs.length,
+                        actionRequiredCount: acceptedOffers.length
+                    },
+                    newJobs: newJobs,
+                    acceptedOffers: acceptedOffers
+                }
+            });
+
+        } catch (error) {
+            console.error('Get Provider Home Error:', error);
+            return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }
-      });
-
-    } catch (error) {
-      console.error('Provider Home Error:', error);
-      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
-    }
-  },
+    },
 
   // ============================================================
   // ADD / UPDATE PROVIDER WORK DETAILS
