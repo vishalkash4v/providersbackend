@@ -1,7 +1,7 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const { uploadSingleFile } = require('../utils/r2uploads');
-const notifyUser = require('../utils/notification'); // Ya jo bhi exact export aapne is file mein banaya ho
+const { notifyUser } = require('../utils/notification');
 const {
   generateToken,
 } = require('../middleware/jwt');
