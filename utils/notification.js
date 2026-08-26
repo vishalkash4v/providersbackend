@@ -82,7 +82,7 @@ const notifyUser = async ({
 
         console.log(
           `🔔 Push Notification fired successfully to ${userId}:`,
-          response
+          response,"DEVICE_TOKEN:", userDevice.deviceToken
         );
 
       } else {
