@@ -35,10 +35,13 @@ module.exports = {
             const providerProfileData = await ProviderProfile.findOne({ user: userId }).lean();
             const mySelectedServices = providerProfileData?.services || [];
 
-            const providerUser = await User.findById(userId).select('bookingCredits').lean();
-            const creditsLeft = Math.max(0, Number(providerUser?.bookingCredits || 0));
-
-            const pendingReferrals = await Referral.countDocuments({ referrer: userId, status: 'PENDING' });
+            // 👇 FETCHING EXACT STATS REQUIRED 👇
+            const providerUser = await User.findById(userId).select('bookingCredits bookingCreditsTotal').lean();
+            
+            // currentBalance: How many free jobs are left to be used
+            const currentBalance = Math.max(0, Number(providerUser?.bookingCredits || 0));
+            // totalCount: Total free jobs EVER earned (sign-up bonus + referral rewards)
+            const totalCount = Math.max(0, Number(providerUser?.bookingCreditsTotal || 0));
             
             const providerOffers = await BookingOffer.find({ provider: userId }).lean();
 
@@ -64,17 +67,21 @@ module.exports = {
             let acceptedOffersQuery = { ...baseQuery, _id: { $in: activePendingBookingIds } };
 
             // ========================================================
-            // FETCH BOTH ARRAYS IN PARALLEL (For Max Speed)
+            // FETCH BOTH ARRAYS IN PARALLEL WITH 5 LIMIT (For Max Speed)
             // ========================================================
             let [newJobs, acceptedOffers] = await Promise.all([
                 Booking.find(newJobsQuery)
                     .populate('service', 'name image')
                     .populate('user', 'firstName lastName mobile email profileImage')
-                    .sort({ createdAt: -1 }).lean(),
+                    .sort({ createdAt: -1 })
+                    .limit(5) // 👉 LIMIT OF 5 APPLIED HERE
+                    .lean(),
                 Booking.find(acceptedOffersQuery)
                     .populate('service', 'name image')
                     .populate('user', 'firstName lastName mobile email profileImage')
-                    .sort({ createdAt: -1 }).lean()
+                    .sort({ createdAt: -1 })
+                    .limit(5) // 👉 LIMIT OF 5 APPLIED HERE
+                    .lean()
             ]);
 
             // ========================================================
@@ -93,7 +100,7 @@ module.exports = {
 
                 booking.offerId = myOffer ? myOffer._id : null;
                 booking.providerApprovalExpiresAt = (myOffer && myOffer.status === 1) ? myOffer.providerApprovalExpiresAt : null;
-                booking.creditsLeft = creditsLeft;
+                booking.creditsLeft = currentBalance; 
                 
                 booking.offerAmount = myOffer ? myOffer.offerAmount : null;
                 booking.proposedDate = myOffer ? myOffer.proposedDate : null;
@@ -110,7 +117,7 @@ module.exports = {
                 return booking;
             };
 
-            // Apply injection
+            // Apply injection without changing any existing key structure
             newJobs = newJobs.map(job => injectOfferData(job, '0'));
             acceptedOffers = acceptedOffers.map(job => injectOfferData(job, '1'));
 
@@ -122,10 +129,8 @@ module.exports = {
                 message: 'Provider home dashboard fetched successfully',
                 data: {
                     stats: {
-                        creditsLeft: creditsLeft,
-                        pendingReferrals: pendingReferrals,
-                        newJobsCount: newJobs.length,
-                        actionRequiredCount: acceptedOffers.length
+                        totalCount: totalCount,          // Total earned (First Free + Referrals)
+                        currentBalance: currentBalance  // How many they can use right now
                     },
                     newJobs: newJobs,
                     acceptedOffers: acceptedOffers
