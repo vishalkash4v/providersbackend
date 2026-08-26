@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const { uploadSingleFile } = require('../utils/r2uploads');
+const notifyUser = require('../utils/notification'); // Ya jo bhi exact export aapne is file mein banaya ho
 const {
   generateToken,
 } = require('../middleware/jwt');
@@ -38,7 +39,7 @@ module.exports = {
         'lastName',
         'mobile',
         'email',
-        'password',        
+        'password',
         'role',
       ];
 
@@ -76,7 +77,7 @@ module.exports = {
       // PASSWORD MATCH
       // ============================================================
 
-    
+
 
       // ============================================================
       // NORMALIZE EMAIL / MOBILE
@@ -959,6 +960,24 @@ module.exports = {
 
       const token =
         generateToken(user);
+
+      // ============================================================
+      // SEND LOGIN SUCCESS PUSH NOTIFICATION
+      // ============================================================
+      try {
+        // notifyUser function ko call kar rahe hain
+        // Aapne utils/notification.js mein jo parameters set kiye hain, uske hisaab se pass karein. 
+        // Example format (Title, Body, Data):
+        await notifyUser(
+          user._id, // User ki ID jisko push bhejna hai
+          'Login Successful! 🎉',
+          `Welcome back, ${user.firstName}! You have successfully logged in.`,
+          { type: 'LOGIN_SUCCESS' } // Extra data payload
+        );
+      } catch (pushError) {
+        // Agar Firebase mein koi issue aaya, toh login API crash nahi honi chahiye
+        console.error('Login Push Error:', pushError);
+      }
 
       // ============================================================
       // RESPONSE
