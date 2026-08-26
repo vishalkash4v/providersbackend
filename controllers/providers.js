@@ -32,8 +32,15 @@ module.exports = {
             // ========================================================
             // FETCH PROVIDER DETAILS & STATS
             // ========================================================
-            const providerProfileData = await ProviderProfile.findOne({ user: userId }).lean();
-            const mySelectedServices = providerProfileData?.services || [];
+            // Populate lagaya taaki frontend ko service ka naam aur image mil jaye
+            const providerProfileData = await ProviderProfile.findOne({ user: userId })
+                .populate('services', '_id name image isActive')
+                .lean();
+            
+            const myServicesArray = providerProfileData?.services || [];
+            
+            // Query filter ke liye sirf ID nikali hai taaki code na fate
+            const mySelectedServiceIds = myServicesArray.map(service => service._id);
 
             // 👇 FETCHING EXACT STATS REQUIRED 👇
             const providerUser = await User.findById(userId).select('bookingCredits bookingCreditsTotal').lean();
@@ -56,7 +63,7 @@ module.exports = {
                 .map(o => o.booking.toString());
 
             let newJobsQuery = { ...baseQuery, notifiedProviders: userId };
-            if (mySelectedServices.length > 0) newJobsQuery.service = { $in: mySelectedServices };
+            if (mySelectedServiceIds.length > 0) newJobsQuery.service = { $in: mySelectedServiceIds };
             if (myActiveOfferBookingIds.length > 0) newJobsQuery._id = { $nin: myActiveOfferBookingIds };
 
             // -- For Accepted Offers (Type 1) --
@@ -132,6 +139,7 @@ module.exports = {
                         totalCount: totalCount,          // Total earned (First Free + Referrals)
                         currentBalance: currentBalance  // How many they can use right now
                     },
+                    myServices: myServicesArray, // 👉 Added myServices array!
                     newJobs: newJobs,
                     acceptedOffers: acceptedOffers
                 }

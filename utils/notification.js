@@ -70,7 +70,7 @@ const notifyUser = async ({
 
             serviceId: serviceId
               ? String(serviceId)
-              : '',
+              : 'hello welcome to our app',              
 
             ...stringifiedData,
           },
