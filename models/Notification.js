@@ -25,6 +25,7 @@ const notificationSchema =
           'NEW_BOOKING_REQUEST',
           'BOOKING_UPDATED',
           'BOOKING_UNAVAILABLE',
+          'LOGIN_SUCCESS',
 
           'PROVIDER_ACCEPTED',
 
