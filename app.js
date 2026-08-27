@@ -20,6 +20,7 @@ const authRouter = require('./routes/auth');
 const bookingRouter = require('./routes/booking');
 const paymentRouter = require('./routes/payment');
 const extrasRouter = require('./routes/extras');
+const adminRouter = require('./routes/admin'); // 👉 Admin router import karo
 
 const { connectDB } = require('./utils/db');
 
@@ -232,6 +233,9 @@ app.use(
   extrasRouter
 );
 
+
+
+app.use('/api/admin', adminRouter);
 
 // ============================================================
 // UPLOADS STATIC

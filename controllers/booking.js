@@ -373,7 +373,6 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
     },
-
     acceptBookingOffer: async (req, res) => {
         try {
             const offer = await BookingOffer
@@ -426,13 +425,22 @@ module.exports = {
                 bookingId: offer.booking._id,
 
                 data: {
-                    offerId: offer._id
+                    offerId: offer._id,
+                    providerApprovalExpiresAt: offer.providerApprovalExpiresAt
                 }
             });
 
-            return res.status(200).json({ success: true, message: 'Offer accepted. Awaiting provider confirmation.' });
+            return res.status(200).json({
+                success: true,
+                message: 'Offer accepted. Awaiting provider confirmation.'
+            });
+
         } catch (error) {
-            return res.status(500).json({ success: false, message: 'Error', error: error.message });
+            return res.status(500).json({
+                success: false,
+                message: 'Error',
+                error: error.message
+            });
         }
     },
 
@@ -762,7 +770,7 @@ module.exports = {
         }
     },
 
-   getOffers: async (req, res) => {
+    getOffers: async (req, res) => {
         try {
             const { bookingId } = req.query;
             const role = Number(req.user.role);
