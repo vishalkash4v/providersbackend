@@ -762,16 +762,17 @@ module.exports = {
         }
     },
 
-    getOffers: async (req, res) => {
+   getOffers: async (req, res) => {
         try {
             const { bookingId } = req.query;
             const role = Number(req.user.role);
             let query = {};
 
             if (role === 0) {
-                // User sees offers for their bookings
+                // User sees offers for their bookings, but ONLY PENDING ones (status: 0)
                 const userBookings = await Booking.find({ user: req.user.id }).distinct('_id');
                 query.booking = bookingId ? bookingId : { $in: userBookings };
+                query.status = 0; // 👉 Yeh line add kar di taaki accepted/rejected offers user ko na dikhein
             } else {
                 // Provider sees their own offers
                 query.provider = req.user.id;
@@ -782,15 +783,14 @@ module.exports = {
             let offers = await BookingOffer.find(query)
                 .populate({
                     path: 'booking',
-                    // 1. 'select' line ko poori tarah hata diya taaki FULL DETAILS jayein (images, description, etc.)
                     populate: [
                         { path: 'service', select: 'name image' },
-                        { path: 'user', select: 'firstName lastName profileImage' } // 2. Customer ki photo aur naam bhi attach kar diya
+                        { path: 'user', select: 'firstName lastName profileImage' }
                     ]
                 })
                 .populate('provider', 'firstName lastName profileImage')
                 .sort({ createdAt: -1 })
-                .lean(); // <--- lean() is important here
+                .lean();
 
             // 2. Extract Provider IDs
             const providerIds = [...new Set(offers.map(offer => offer.provider?._id?.toString()).filter(Boolean))];
