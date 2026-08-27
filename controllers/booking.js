@@ -836,7 +836,7 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
     },
-    // ============================================================
+   // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -846,7 +846,6 @@ module.exports = {
             const role = Number(req.user.role);
 
             // 👇 1. AUTO-EXPIRE OFFERS (TIMEOUT LOGIC) 👇
-            // Agar kisi offer ka provider Approval time nikal chuka hai, toh usko 5 (Timeout) kar do.
             await BookingOffer.updateMany({
                 status: 1,
                 providerApprovalExpiresAt: { $lt: new Date() }
@@ -943,6 +942,19 @@ module.exports = {
                 .sort({ createdAt: -1 })
                 .lean();
 
+            // 👇 NAYA CODE: Fetch Provider Locations Only For Type 2 👇
+            let providerLocationMap = {};
+            if (type === '2' && bookings.length > 0) {
+                const assignedProviderIds = [...new Set(bookings.map(b => b.provider?._id?.toString()).filter(Boolean))];
+                if (assignedProviderIds.length > 0) {
+                    const profiles = await ProviderProfile.find({ user: { $in: assignedProviderIds } }).select('user location').lean();
+                    profiles.forEach(p => {
+                        providerLocationMap[p.user.toString()] = p.location || null;
+                    });
+                }
+            }
+            // 👆 ==================================================== 👆
+
             // ========================================================
             // 3. INJECT DATA
             // ========================================================
@@ -970,6 +982,11 @@ module.exports = {
 
                     booking.providerApprovalExpiresAt = null;
                     booking.creditsLeft = null;
+
+                    // 👇 NAYA CODE: Inject provider location if Type 2 👇
+                    if (type === '2' && booking.provider && booking.provider._id) {
+                        booking.provider.location = providerLocationMap[booking.provider._id.toString()] || null;
+                    }
 
                     return booking;
                 });
@@ -1004,6 +1021,11 @@ module.exports = {
                         booking.newStatus = (myOffer && myOffer.status === 1) ? 1 : 0;
                     } else {
                         booking.newStatus = 0;
+                    }
+
+                    // 👇 NAYA CODE: Inject provider location if Type 2 👇
+                    if (type === '2' && booking.provider && booking.provider._id) {
+                        booking.provider.location = providerLocationMap[booking.provider._id.toString()] || null;
                     }
 
                     return booking;
