@@ -836,7 +836,7 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
     },
-   // ============================================================
+ // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -942,7 +942,7 @@ module.exports = {
                 .sort({ createdAt: -1 })
                 .lean();
 
-            // 👇 NAYA CODE: Fetch Provider Locations Only For Type 2 👇
+            // Fetch Provider Locations Only For Type 2 (Works for both User & Provider)
             let providerLocationMap = {};
             if (type === '2' && bookings.length > 0) {
                 const assignedProviderIds = [...new Set(bookings.map(b => b.provider?._id?.toString()).filter(Boolean))];
@@ -953,7 +953,6 @@ module.exports = {
                     });
                 }
             }
-            // 👆 ==================================================== 👆
 
             // ========================================================
             // 3. INJECT DATA
@@ -970,7 +969,23 @@ module.exports = {
                 bookings = bookings.map(booking => {
                     const finalOffer = userActiveOffers.find(o => o.booking.toString() === booking._id.toString());
 
-                    booking.distanceKm = null;
+                    // Default to offer's distance if available
+                    let calculatedDistance = finalOffer ? finalOffer.distanceKm : null; 
+
+                    // 👇 NAYA CODE: Type 2 me Live Distance Calculate karna (Same as Provider) 👇
+                    if (type === '2' && booking.provider && booking.provider._id) {
+                        const pLoc = providerLocationMap[booking.provider._id.toString()];
+                        booking.provider.location = pLoc || null;
+
+                        if (pLoc && pLoc.coordinates && booking.location && booking.location.coordinates) {
+                            const [pLng, pLat] = pLoc.coordinates;
+                            const [bLng, bLat] = booking.location.coordinates;
+                            calculatedDistance = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
+                        }
+                    }
+                    
+                    booking.distanceKm = calculatedDistance; // 👉 Yahan Customer ko Live Distance mil jayega!
+                    
                     booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
 
                     booking.offerId = finalOffer ? finalOffer._id : null;
@@ -982,11 +997,6 @@ module.exports = {
 
                     booking.providerApprovalExpiresAt = null;
                     booking.creditsLeft = null;
-
-                    // 👇 NAYA CODE: Inject provider location if Type 2 👇
-                    if (type === '2' && booking.provider && booking.provider._id) {
-                        booking.provider.location = providerLocationMap[booking.provider._id.toString()] || null;
-                    }
 
                     return booking;
                 });
@@ -1023,7 +1033,6 @@ module.exports = {
                         booking.newStatus = 0;
                     }
 
-                    // 👇 NAYA CODE: Inject provider location if Type 2 👇
                     if (type === '2' && booking.provider && booking.provider._id) {
                         booking.provider.location = providerLocationMap[booking.provider._id.toString()] || null;
                     }
