@@ -354,13 +354,18 @@ module.exports = {
                 distanceKm: Number(distanceKm.toFixed(2)),
                 status: 0, // 0 = Pending
             });
+
             // Provider ne offer bheja, Customer ko batao
             await notifyUser({
                 userId: booking.user,
                 type: 'NEW_OFFER_RECEIVED',
                 title: 'New Offer Received! 💰',
                 message: `A provider has sent an offer of ₹${amount} for your service request.`,
-                bookingId: booking._id
+                bookingId: booking._id,
+
+                data: {
+                    offerId: offer._id
+                }
             });
 
             return res.status(201).json({ success: true, message: 'Offer submitted', data: offer });
@@ -371,23 +376,58 @@ module.exports = {
 
     acceptBookingOffer: async (req, res) => {
         try {
-            const offer = await BookingOffer.findById(req.params.offerId).populate('booking');
-            if (!offer || offer.booking.user.toString() !== req.user.id.toString()) return res.status(404).json({ success: false, message: 'Offer not found' });
-            if (offer.booking.status !== 0 || offer.booking.deletedAt) return res.status(400).json({ success: false, message: 'Booking no longer available' });
-            if (offer.status !== 0) return res.status(400).json({ success: false, message: 'Offer already processed' });
+            const offer = await BookingOffer
+                .findById(req.params.offerId)
+                .populate('booking');
 
-            const approvalMinutes = Number(process.env.PROVIDER_APPROVAL_WINDOW_MINUTES || 10);
+            if (
+                !offer ||
+                offer.booking.user.toString() !== req.user.id.toString()
+            ) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Offer not found'
+                });
+            }
+
+            if (offer.booking.status !== 0 || offer.booking.deletedAt) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Booking no longer available'
+                });
+            }
+
+            if (offer.status !== 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Offer already processed'
+                });
+            }
+
+            const approvalMinutes = Number(
+                process.env.PROVIDER_APPROVAL_WINDOW_MINUTES || 10
+            );
+
             offer.status = 1; // 1 = Accepted by User
             offer.userAcceptedAt = new Date();
-            offer.providerApprovalExpiresAt = new Date(Date.now() + approvalMinutes * 60 * 1000);
+
+            offer.providerApprovalExpiresAt = new Date(
+                Date.now() + approvalMinutes * 60 * 1000
+            );
+
             await offer.save();
-            // Customer ne accept kiya, Provider ko batao payment/final approval ke liye
+
+            // Customer ne accept kiya, Provider ko batao
             await notifyUser({
                 userId: offer.provider,
                 type: 'OFFER_ACCEPTED',
                 title: 'Offer Accepted! 🎉',
-                message: `The customer has accepted your offer! Open the app to finalize the booking.`,
-                bookingId: offer.booking._id
+                message: 'The customer has accepted your offer! Open the app to finalize the booking.',
+                bookingId: offer.booking._id,
+
+                data: {
+                    offerId: offer._id
+                }
             });
 
             return res.status(200).json({ success: true, message: 'Offer accepted. Awaiting provider confirmation.' });
@@ -398,20 +438,47 @@ module.exports = {
 
     rejectBookingOffer: async (req, res) => {
         try {
-            const offer = await BookingOffer.findById(req.params.offerId).populate('booking');
-            if (!offer || offer.booking.user.toString() !== req.user.id.toString()) return res.status(404).json({ success: false, message: 'Offer not found' });
-            if (offer.status !== 0 && offer.status !== 1) return res.status(400).json({ success: false, message: 'Offer cannot be rejected at this stage' });
+            const offer = await BookingOffer
+                .findById(req.params.offerId)
+                .populate('booking');
+
+            if (
+                !offer ||
+                offer.booking.user.toString() !== req.user.id.toString()
+            ) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Offer not found'
+                });
+            }
+
+            if (offer.status !== 0 && offer.status !== 1) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Offer cannot be rejected at this stage'
+                });
+            }
 
             offer.status = 2; // 2 = Rejected by User
-            if (req.body.rejectionReason) offer.rejectionReason = req.body.rejectionReason;
+
+            if (req.body.rejectionReason) {
+                offer.rejectionReason = req.body.rejectionReason;
+            }
+
             await offer.save();
+
             // Customer ne offer reject kiya, Provider ko batao
             await notifyUser({
                 userId: offer.provider,
                 type: 'OFFER_REJECTED',
                 title: 'Offer Rejected ❌',
-                message: `The customer has rejected your offer.`,
-                bookingId: offer.booking._id
+                message: 'The customer has rejected your offer.',
+                bookingId: offer.booking._id,
+
+                data: {
+                    offerId: offer._id,
+                    rejectionReason: offer.rejectionReason || ''
+                }
             });
 
             return res.status(200).json({ success: true, message: 'Offer rejected' });
@@ -493,6 +560,7 @@ module.exports = {
 
                         return { success: true, alreadyFinalized: true, booking: currentBooking, offer, payment };
                     }
+
                     // 👆 ===================================================================== 👆
 
                     // Agar kisi sach mein dusre provider ko mili hai, TABHI refund karo!
@@ -531,7 +599,15 @@ module.exports = {
                 if (referral) {
                     const rewardCredits = Number(process.env.PROVIDER_FREE_JOBS_PER_REFERRAL || 0);
                     if (rewardCredits > 0) {
-                        await addBookingCredits({ providerId: referral.referrer, amount: rewardCredits, type: 'REFERRAL_REWARD', referral: referral._id, booking: booking._id, description: 'Referral reward for referred provider first approved job' });
+                        await addBookingCredits({
+                            providerId: referral.referrer,
+                            amount: rewardCredits,
+                            type: 'REFERRAL_REWARD',
+                            referral: referral._id,
+                            booking: booking._id,
+                            description: 'Referral reward for referred provider first approved job'
+                        });
+
                         referral.status = 'SUCCESS';
                         referral.firstBooking = booking._id;
                         referral.successfulAt = new Date();
@@ -542,8 +618,17 @@ module.exports = {
 
                 // Reject other pending offers since this one won
                 await BookingOffer.updateMany(
-                    { booking: booking._id, _id: { $ne: offer._id }, status: { $in: [0, 1] } },
-                    { $set: { status: 2, rejectionReason: 'Another provider was assigned to this job' } }
+                    {
+                        booking: booking._id,
+                        _id: { $ne: offer._id },
+                        status: { $in: [0, 1] }
+                    },
+                    {
+                        $set: {
+                            status: 2,
+                            rejectionReason: 'Another provider was assigned to this job'
+                        }
+                    }
                 );
 
                 // ----------------------------------------------------
@@ -555,7 +640,10 @@ module.exports = {
                 const creditsUsed = Math.max(0, creditsTotal - creditsLeft);
 
                 // Count referrals sent BY this provider that are still pending
-                const pendingReferrals = await Referral.countDocuments({ referrer: req.user.id, status: 'PENDING' });
+                const pendingReferrals = await Referral.countDocuments({
+                    referrer: req.user.id,
+                    status: 'PENDING'
+                });
 
                 // Provider ne final kar diya, Customer ko batao booking fix ho gayi
                 await notifyUser({
@@ -563,8 +651,12 @@ module.exports = {
                     type: 'BOOKING_CONFIRMED',
                     title: 'Booking Confirmed! ✅',
                     message: `The provider has confirmed your booking and will arrive at the scheduled time.`,
-                    bookingId: booking._id
+                    bookingId: booking._id,
+                    data: {
+                        offerId: offer._id
+                    }
                 });
+
                 return res.status(200).json({
                     success: true,
                     message: 'Booking confirmed successfully using free booking credit!',
@@ -591,7 +683,10 @@ module.exports = {
 
             // Calculate stats to show on the payment screen as well
             const creditsTotal = Number(provider.bookingCreditsTotal || 0);
-            const pendingReferrals = await Referral.countDocuments({ referrer: req.user.id, status: 'PENDING' });
+            const pendingReferrals = await Referral.countDocuments({
+                referrer: req.user.id,
+                status: 'PENDING'
+            });
 
             return res.status(402).json({
                 success: false,
@@ -613,29 +708,57 @@ module.exports = {
 
         } catch (error) {
             console.error('Approve Booking Offer Error:', error);
-            return res.status(500).json({ success: false, message: 'Error', error: error.message });
+            return res.status(500).json({
+                success: false,
+                message: 'Error',
+                error: error.message
+            });
         }
     },
 
     cancelBookingOffer: async (req, res) => {
         try {
             const offer = await BookingOffer.findById(req.params.offerId);
-            if (!offer || offer.provider.toString() !== req.user.id.toString()) return res.status(404).json({ success: false, message: 'Offer not found' });
-            if (offer.status !== 1) return res.status(400).json({ success: false, message: 'Can only cancel if user has accepted' });
+
+            if (!offer || offer.provider.toString() !== req.user.id.toString()) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Offer not found'
+                });
+            }
+
+            if (offer.status !== 1) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Can only cancel if user has accepted'
+                });
+            }
 
             offer.status = 4; // 4 = Rejected by Provider
             await offer.save();
+
             await notifyUser({
                 userId: offer.booking.user,
                 type: 'OFFER_WITHDRAWN',
                 title: 'Offer Withdrawn ❌',
                 message: `A provider has withdrawn their offer for your booking.`,
-                bookingId: offer.booking._id
+                bookingId: offer.booking._id,
+                data: {
+                    offerId: offer._id
+                }
             });
 
-            return res.status(200).json({ success: true, message: 'Offer cancelled by provider' });
+            return res.status(200).json({
+                success: true,
+                message: 'Offer cancelled by provider'
+            });
+
         } catch (error) {
-            return res.status(500).json({ success: false, message: 'Error', error: error.message });
+            return res.status(500).json({
+                success: false,
+                message: 'Error',
+                error: error.message
+            });
         }
     },
 
