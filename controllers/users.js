@@ -1,5 +1,4 @@
 const ProviderProfile = require('../models/ProviderProfile');
-  const Notification = require('../models/Notification'); // Top par import zaroor check kar lena
 
 module.exports = {
 
@@ -253,36 +252,6 @@ module.exports = {
   },
 
 
-// ============================================================
-// GET USER/PROVIDER NOTIFICATIONS
-// ============================================================
-getNotifications: async (req, res) => {
-    try {
-        const userId = req.user.id; // Token se user ID mil jayegi
 
-        // Database se is user ki notifications nikalo (Latest sabse upar, max 50)
-        const notifications = await Notification.find({ user: userId })
-            .sort({ createdAt: -1 }) // Nayi notifications pehle aayengi
-            .limit(50)               // Limit laga do taaki API fast rahe
-            .lean();
-
-        // Optional: Agar 'isRead' status update karna ho toh yahan kar sakte ho
-        // await Notification.updateMany({ user: userId, isRead: false }, { $set: { isRead: true } });
-
-        return res.status(200).json({
-            success: true,
-            message: 'Notifications fetched successfully',
-            data: notifications
-        });
-
-    } catch (error) {
-        console.error('Fetch Notifications Error:', error);
-        return res.status(500).json({ 
-            success: false, 
-            message: 'Something went wrong', 
-            error: error.message 
-        });
-    }
-},
 
 };

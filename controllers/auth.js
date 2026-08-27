@@ -5,6 +5,7 @@ const { notifyUser } = require('../utils/notification');
 const {
   generateToken,
 } = require('../middleware/jwt');
+const Notification = require('../models/Notification'); // Top par import zaroor check kar lena
 
 const sendEmail = require('../utils/sendEmail');
 const ProviderProfile = require('../models/ProviderProfile');
@@ -961,7 +962,7 @@ module.exports = {
       const token =
         generateToken(user);
 
-    
+
 
       // ============================================================
       // RESPONSE
@@ -2205,5 +2206,93 @@ module.exports = {
       });
     }
   },
+
+
+
+  //Common
+  // ============================================================
+  // GET USER/PROVIDER NOTIFICATIONS
+  // ============================================================
+  getNotifications: async (req, res) => {
+    try {
+      const userId = req.user.id; // Token se user ID mil jayegi
+
+      // Database se is user ki notifications nikalo (Latest sabse upar, max 50)
+      const notifications = await Notification.find({ user: userId })
+        .sort({ createdAt: -1 }) // Nayi notifications pehle aayengi
+        .limit(50)               // Limit laga do taaki API fast rahe
+        .lean();
+
+      // Optional: Agar 'isRead' status update karna ho toh yahan kar sakte ho
+      // await Notification.updateMany({ user: userId, isRead: false }, { $set: { isRead: true } });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Notifications fetched successfully',
+        data: notifications
+      });
+
+    } catch (error) {
+      console.error('Fetch Notifications Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Something went wrong',
+        error: error.message
+      });
+    }
+  },
+
+  // ============================================================
+  // MARK A SINGLE NOTIFICATION AS READ (Read One)
+  // ============================================================
+  markNotificationAsRead: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user.id;
+
+      // Read One
+      const notification = await Notification.findOneAndUpdate(
+        { _id: id, user: userId },
+        { $set: { isRead: true, readAt: new Date() } }, // 👉 Yahan readAt add kar diya
+        { returnDocument: 'after' }
+      );
+
+      if (!notification) {
+        return res.status(404).json({ success: false, message: 'Notification not found' });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Notification marked as read',
+        data: notification
+      });
+    } catch (error) {
+      console.error('Mark Notification As Read Error:', error);
+      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
+    }
+  },
+
+  // ============================================================
+  // MARK ALL USER NOTIFICATIONS AS READ (Read All)
+  // ============================================================
+  markAllNotificationsAsRead: async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      // Read All
+      await Notification.updateMany(
+        { user: userId, isRead: false },
+        { $set: { isRead: true, readAt: new Date() } }   // 👉 Yahan bhi readAt add kar diya
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: 'All notifications marked as read'
+      });
+    } catch (error) {
+      console.error('Mark All Notifications As Read Error:', error);
+      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
+    }
+  }
 
 };

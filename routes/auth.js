@@ -21,4 +21,14 @@ router.get('/me', authenticateToken, authController.getMe);
 router.post('/change-password', authenticateToken, authController.changePassword);
 router.post('/logout', authenticateToken, authController.logout);
 
+
+
+//commong
+
+router.get('/notifications', authenticateToken, authController.getNotifications);
+// Mark a specific notification as read
+router.put('/notifications/:id/read', authenticateToken, authController.markNotificationAsRead);
+
+// Mark all notifications as read for the logged-in user
+router.put('/notifications/read-all', authenticateToken, authController.markAllNotificationsAsRead);
 module.exports = router;

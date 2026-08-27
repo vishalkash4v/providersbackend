@@ -8,6 +8,5 @@ router.use(ensureDB);
 
 // Public - Homepage nearby providers
 router.get('/home', usersController.home);
-// Ensure usersController is imported correctly at the top
-router.get('/notifications', authenticateToken, usersController.getNotifications);
+
 module.exports = router;
