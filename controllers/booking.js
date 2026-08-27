@@ -294,8 +294,6 @@ module.exports = {
         }
     },
 
-
-
     // ============================================================
     // OFFERS MANAGEMENT
     // ============================================================
@@ -524,7 +522,6 @@ module.exports = {
             // FREE BOOKING LOGIC
             // ========================================================
             if (Number(provider.bookingCredits || 0) > 0) {
-                // Atomic booking claim to prevent race conditions
                 // ========================================================
                 // ATOMIC BOOKING CLAIM
                 // ========================================================
@@ -537,7 +534,7 @@ module.exports = {
                     },
                     {
                         $set: {
-                            provider: payment.provider,
+                            provider: req.user.id, // Fixed: changed 'payment.provider' to req.user.id for Free Booking
                             status: 1, // 1 = ASSIGNED/FINALIZED
                             providerAcceptedAt: new Date(),
                         },
@@ -547,42 +544,28 @@ module.exports = {
 
                 // Agar claim fail hua (provider: null nahi tha)
                 if (!claimedBooking) {
-                    // 👇 NAYA CODE: Refund karne se pehle check karo ki booking kisko mili hai 👇
                     const currentBooking = await Booking.findById(booking._id);
 
                     // Agar same usi provider ko mili hai (kisi dusri API thread ke through), toh SUCCESS maano!
-                    if (currentBooking && currentBooking.provider && currentBooking.provider.toString() === payment.provider.toString()) {
+                    if (currentBooking && currentBooking.provider && currentBooking.provider.toString() === req.user.id.toString()) {
                         console.log('⚡ [Race Condition Resolved] Booking already assigned to THIS provider by another thread.');
 
-                        payment.status = 'PAID';
-                        payment.paidAt = payment.paidAt || new Date();
-                        await payment.save();
-
-                        offer.accessType = 'PAID';
-                        offer.paymentStatus = 'PAID';
+                        offer.accessType = 'FREE_CREDIT';
+                        offer.paymentStatus = 'NOT_REQUIRED';
                         offer.providerApprovedAt = offer.providerApprovedAt || new Date();
                         offer.status = 3; // 3 = PROVIDER_APPROVED
-                        offer.paymentId = payment.razorpayPaymentId || offer.paymentId;
-                        offer.paymentPaidAt = payment.paidAt;
                         await offer.save();
 
-                        return { success: true, alreadyFinalized: true, booking: currentBooking, offer, payment };
+                        return { success: true, alreadyFinalized: true, booking: currentBooking, offer };
                     }
 
-                    // 👆 ===================================================================== 👆
-
-                    // Agar kisi sach mein dusre provider ko mili hai, TABHI refund karo!
-                    console.log('⚠️ [Refund Triggered] Booking lost to SOMEONE ELSE.');
+                    // Agar kisi sach mein dusre provider ko mili hai, TABHI refund/reject karo!
+                    console.log('⚠️ [Free Credit] Booking lost to SOMEONE ELSE.');
                     offer.status = 2; // 2 = REJECTED
                     offer.rejectionReason = 'Lost to another provider during finalization';
-                    offer.paymentStatus = 'PAID';
                     await offer.save();
-                    await refundLosingPayment({ payment });
-                    return { success: false, bookingAlreadyAssigned: true, message: 'Another provider has already been assigned this booking.' };
-                }
-
-                if (!claimedBooking) {
-                    return res.status(409).json({ success: false, message: 'Another provider has already been assigned this booking' });
+                    
+                    return res.status(409).json({ success: false, bookingAlreadyAssigned: true, message: 'Another provider has already been assigned this booking.' });
                 }
 
                 const creditUsed = await useBookingCredit({ providerId: req.user.id, bookingId: booking._id });
@@ -624,7 +607,13 @@ module.exports = {
                     }
                 }
 
-                // Reject other pending offers since this one won
+                // 👇 Reject other pending offers and Notify them 👇
+                const losingOffersList = await BookingOffer.find({ 
+                    booking: booking._id, 
+                    _id: { $ne: offer._id }, 
+                    status: { $in: [0, 1] } 
+                });
+
                 await BookingOffer.updateMany(
                     {
                         booking: booking._id,
@@ -638,6 +627,21 @@ module.exports = {
                         }
                     }
                 );
+
+                for (const losingOffer of losingOffersList) {
+                    try {
+                        await notifyUser({
+                            userId: losingOffer.provider,
+                            type: 'OFFER_REJECTED',
+                            title: 'Job Assigned to Someone Else 😔',
+                            message: 'The customer has assigned this job to another provider. Better luck next time!',
+                            bookingId: booking._id
+                        });
+                    } catch (err) {
+                        console.error('Failed to notify losing provider:', err);
+                    }
+                }
+                // 👆 ========================================== 👆
 
                 // ----------------------------------------------------
                 // CALCULATE PROVIDER STATS (Credits & Referrals)

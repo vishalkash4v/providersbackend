@@ -18,6 +18,7 @@ const {
     addBookingCredits,
 } = require('../utils/bookingCredits');
 
+const { notifyUser } = require('../utils/notification');
 
 // ============================================================
 // PAYMENT MODE
@@ -69,22 +70,48 @@ const completeReferralIfRequired = async ({ providerId, bookingId }) => {
 };
 
 // ============================================================
-// REJECT OTHER OFFERS
+// REJECT OTHER OFFERS & NOTIFY LOSING PROVIDERS
 // ============================================================
 const rejectOtherOffers = async ({ bookingId, winningOfferId }) => {
-    await BookingOffer.updateMany(
-        {
+    try {
+        // Find losing offers before updating so we can notify them
+        const losingOffers = await BookingOffer.find({
             booking: bookingId,
             _id: { $ne: winningOfferId },
             status: { $in: [0, 1] }, // 0 = PENDING, 1 = USER_ACCEPTED
-        },
-        {
-            $set: {
-                status: 2, // 2 = REJECTED
-                rejectionReason: 'Another provider was assigned to this job'
+        });
+
+        await BookingOffer.updateMany(
+            {
+                booking: bookingId,
+                _id: { $ne: winningOfferId },
+                status: { $in: [0, 1] },
             },
+            {
+                $set: {
+                    status: 2, // 2 = REJECTED
+                    rejectionReason: 'Another provider was assigned to this job'
+                },
+            }
+        );
+
+        // Notify losing providers
+        for (const offer of losingOffers) {
+            try {
+                await notifyUser({
+                    userId: offer.provider,
+                    type: 'OFFER_REJECTED',
+                    title: 'Job Assigned to Someone Else 😔',
+                    message: 'The customer has assigned this job to another provider. Better luck next time!',
+                    bookingId: bookingId
+                });
+            } catch (notifError) {
+                console.error('Failed to send rejection notification:', notifError);
+            }
         }
-    );
+    } catch (error) {
+        console.error('Error in rejectOtherOffers:', error);
+    }
 };
 
 // ============================================================
@@ -235,6 +262,23 @@ const finalizeBookingPayment = async ({ payment }) => {
     // ========================================================
     await completeReferralIfRequired({ providerId: payment.provider, bookingId: claimedBooking._id });
     await rejectOtherOffers({ bookingId: claimedBooking._id, winningOfferId: offer._id });
+
+    // 👇 CUSTOMER KO NOTIFICATION BHEJO 👇
+    try {
+        await notifyUser({
+            userId: claimedBooking.user, 
+            type: 'BOOKING_CONFIRMED',
+            title: 'Booking Confirmed! ✅',
+            message: 'The provider has successfully paid the access fee and confirmed your booking.',
+            bookingId: claimedBooking._id,
+            data: {
+                offerId: String(offer._id)
+            }
+        });
+    } catch (notifError) {
+        console.error('Failed to send BOOKING_CONFIRMED notification during payment:', notifError);
+    }
+    // 👆 ========================================= 👆
 
     return { success: true, booking: claimedBooking, offer, payment };
 };
