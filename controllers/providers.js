@@ -139,6 +139,7 @@ module.exports = {
                         totalCount: totalCount,          // Total earned (First Free + Referrals)
                         currentBalance: currentBalance  // How many they can use right now
                     },
+                    providerLocation: providerProfileData?.location || null,
                     myServices: myServicesArray, // 👉 Added myServices array!
                     newJobs: newJobs,
                     acceptedOffers: acceptedOffers
