@@ -777,10 +777,17 @@ module.exports = {
             let query = {};
 
             if (role === 0) {
-                // User sees offers for their bookings, but ONLY PENDING ones (status: 0)
+                // User sees offers for their bookings
                 const userBookings = await Booking.find({ user: req.user.id }).distinct('_id');
-                query.booking = bookingId ? bookingId : { $in: userBookings };
-                query.status = 0; // 👉 Yeh line add kar di taaki accepted/rejected offers user ko na dikhein
+
+                if (bookingId) {
+                    // 👉 Agar specific bookingID aayi hai, toh STATUS filter mat lagao (Sab dikhao)
+                    query.booking = bookingId;
+                } else {
+                    // 👉 Agar general offers dekh rahe hain, toh SIRF PENDING (0) dikhao
+                    query.booking = { $in: userBookings };
+                    query.status = 0;
+                }
             } else {
                 // Provider sees their own offers
                 query.provider = req.user.id;
@@ -798,7 +805,7 @@ module.exports = {
                 })
                 .populate('provider', 'firstName lastName profileImage')
                 .sort({ createdAt: -1 })
-                .lean();
+                .lean(); // <--- lean() is important here
 
             // 2. Extract Provider IDs
             const providerIds = [...new Set(offers.map(offer => offer.provider?._id?.toString()).filter(Boolean))];

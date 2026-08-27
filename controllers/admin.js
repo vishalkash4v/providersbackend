@@ -49,16 +49,69 @@ module.exports = {
         } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
     },
 
+  // ============================================================
+    // 1. DASHBOARD STATS & GRAPHS
+    // ============================================================
     getDashboardStats: async (req, res) => {
         try {
+            // --- 1. Top Cards Data (Counts & Earnings) ---
             const totalUsers = await User.countDocuments({ role: 0 });
             const totalProviders = await User.countDocuments({ role: 1 });
-            const totalBookings = await Booking.countDocuments();
+            const totalBookings = await Booking.countDocuments({ deletedAt: null });
+            
             const payments = await BookingPayment.find({ status: 'PAID' }).lean();
             const totalEarnings = payments.reduce((sum, pay) => sum + (Number(pay.amount) || 0), 0);
 
-            return res.status(200).json({ success: true, data: { totalUsers, totalProviders, totalBookings, totalEarnings } });
-        } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
+            // --- 2. Graph Data (Analytics) ---
+            const now = new Date();
+            
+            // Graph A: Last 7 Days Bookings (Daily Trend)
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(now.getDate() - 7);
+
+            const dailyBookings = await Booking.aggregate([
+                { $match: { createdAt: { $gte: sevenDaysAgo }, deletedAt: null } },
+                {
+                    $group: {
+                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ]);
+
+            // Graph B: Monthly Bookings (Current Year Trend)
+            const startOfYear = new Date(now.getFullYear(), 0, 1);
+            const monthlyBookings = await Booking.aggregate([
+                { $match: { createdAt: { $gte: startOfYear }, deletedAt: null } },
+                {
+                    $group: {
+                        _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } }, // Example: "2026-08"
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ]);
+
+            return res.status(200).json({ 
+                success: true, 
+                message: 'Dashboard stats and graphs fetched',
+                data: { 
+                    counts: {
+                        totalUsers, 
+                        totalProviders, 
+                        totalBookings, 
+                        totalEarnings: Number(totalEarnings.toFixed(2))
+                    },
+                    graphs: {
+                        dailyBookings,   // Frontend pe Bar/Line chart (Last 7 days) ke liye
+                        monthlyBookings  // Frontend pe Bar/Line chart (This Year) ke liye
+                    }
+                } 
+            });
+        } catch (error) { 
+            return res.status(500).json({ success: false, message: error.message }); 
+        }
     },
 
     // ============================================================
