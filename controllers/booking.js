@@ -424,7 +424,7 @@ module.exports = {
 
                 data: {
                     offerId: offer._id,
-                    providerApprovalExpiresAt: offer.providerApprovalExpiresAt
+                  providerApprovalExpiresAt: offer.providerApprovalExpiresAt.toISOString()
                 }
             });
 

@@ -2293,6 +2293,64 @@ module.exports = {
       console.error('Mark All Notifications As Read Error:', error);
       return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
     }
-  }
+  },
+
+  // ============================================================
+    // DELETE SINGLE NOTIFICATION
+    // ============================================================
+    deleteNotification: async (req, res) => {
+        try {
+            const { notificationId } = req.params;
+
+            // Notification dhoondo aur delete karo, par ensure karo ki wo ishi user ki ho
+            const notification = await Notification.findOneAndDelete({
+                _id: notificationId,
+                user: req.user.id 
+            });
+
+            if (!notification) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Notification not found'
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: 'Notification deleted successfully'
+            });
+
+        } catch (error) {
+            console.error('Delete Notification Error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Something went wrong',
+                error: error.message
+            });
+        }
+    },
+
+    // ============================================================
+    // CLEAR ALL NOTIFICATIONS (Delete All)
+    // ============================================================
+    clearAllNotifications: async (req, res) => {
+        try {
+            // Is user ki saari notifications DB se uda do
+            await Notification.deleteMany({ user: req.user.id });
+
+            return res.status(200).json({
+                success: true,
+                message: 'All notifications cleared successfully'
+            });
+
+        } catch (error) {
+            console.error('Clear All Notifications Error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Something went wrong',
+                error: error.message
+            });
+        }
+    }
 
 };

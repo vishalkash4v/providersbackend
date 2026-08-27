@@ -31,4 +31,12 @@ router.put('/notifications/:id/read', authenticateToken, authController.markNoti
 
 // Mark all notifications as read for the logged-in user
 router.put('/notifications/read-all', authenticateToken, authController.markAllNotificationsAsRead);
+
+// ... baaki routes ...
+
+// Delete specific notification (ID URL mein aayegi)
+router.delete('/notifications/:notificationId', authenticateToken, authController.deleteNotification);
+
+// Clear all notifications ek sath
+router.delete('/notifications', authenticateToken, authController.clearAllNotifications);
 module.exports = router;
