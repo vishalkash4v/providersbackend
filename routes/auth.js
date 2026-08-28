@@ -39,4 +39,7 @@ router.delete('/notifications/:notificationId', authenticateToken, authControlle
 
 // Clear all notifications ek sath
 router.delete('/notifications', authenticateToken, authController.clearAllNotifications);
+
+// POST /api/auth/support
+router.post('/support', authenticateToken, authController.createSupportTicket);
 module.exports = router;

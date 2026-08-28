@@ -5,6 +5,7 @@ const BookingOffer = require('../models/BookingOffer');
 const BookingPayment = require('../models/BookingPayment');
 const Service = require('../models/Service');
 const TokenBlacklist = require('../models/TokenBlacklist');
+const Support = require('../models/Support');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { generateToken } = require('../middleware/jwt');
@@ -388,5 +389,28 @@ module.exports = {
             if (!service) return res.status(404).json({ success: false, message: 'Service not found' });
             return res.status(200).json({ success: true, message: 'Service deleted' });
         } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
-    }
+    },
+    getSupportTickets: async (req, res) => {
+        try {
+            // Fetch tickets, newest first, and populate user details
+            const tickets = await Support.find()
+                .populate('user', 'firstName lastName email mobile role')
+                .sort({ createdAt: -1 })
+                .lean();
+
+            return res.status(200).json({
+                success: true,
+                message: 'Support tickets fetched successfully',
+                count: tickets.length,
+                data: tickets
+            });
+        } catch (error) {
+            console.error('Get Support Tickets Error:', error);
+            return res.status(500).json({ 
+                success: false, 
+                message: 'Something went wrong', 
+                error: error.message 
+            });
+        }
+    },
 };

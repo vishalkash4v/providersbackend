@@ -44,4 +44,6 @@ router.post('/services', isAdmin, adminController.addService);
 router.put('/services/:id', isAdmin, adminController.updateService);
 router.delete('/services/:id', isAdmin, adminController.deleteService);
 
+router.get('/support', isAdmin, adminController.getSupportTickets);
+
 module.exports = router;

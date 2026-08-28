@@ -23,6 +23,8 @@ const {
 const jwt = require('jsonwebtoken');
 const TokenBlacklist = require('../models/TokenBlacklist');
 
+const Support = require('../models/Support');
+
 module.exports = {
 
   // ============================================================
@@ -2353,6 +2355,38 @@ module.exports = {
                 error: error.message
             });
         }
-    }
+    },
+
+    createSupportTicket: async (req, res) => {
+        try {
+            const { subject, description } = req.body;
+
+            if (!subject || !description) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Subject and description are required' 
+                });
+            }
+
+            const supportTicket = await Support.create({
+                user: req.user.id,
+                subject: subject.trim(),
+                description: description.trim(),
+            });
+
+            return res.status(201).json({
+                success: true,
+                message: 'Your support request has been submitted successfully. Our team will contact you shortly.',
+                // data: supportTicket
+            });
+        } catch (error) {
+            console.error('Create Support Ticket Error:', error);
+            return res.status(500).json({ 
+                success: false, 
+                message: 'Something went wrong', 
+                error: error.message 
+            });
+        }
+    },
 
 };
