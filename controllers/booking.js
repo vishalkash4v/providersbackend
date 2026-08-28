@@ -672,11 +672,11 @@ module.exports = {
                 return res.status(200).json({
                     success: true,
                     message: 'Booking confirmed successfully using free booking credit!',
-                    data: {
-                        creditsLeft,
-                        creditsUsed,
-                        pendingReferrals
-                    }
+                    // data: {
+                    //     creditsLeft,
+                    //     creditsUsed,
+                    //     pendingReferrals
+                    // }
                 });
             }
 
