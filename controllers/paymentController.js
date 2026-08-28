@@ -473,15 +473,49 @@ const createBookingPaymentOrder = async (req, res) => {
         const provider = await User.findById(req.user.id);
         if (!provider) return res.status(404).json({ success: false, message: 'Provider not found' });
 
-        if (Number(provider.bookingCredits || 0) > 0) {
-            return res.status(400).json({
-                success: false,
+        // 👇 FETCH STATS 👇
+        const creditsLeft = Number(provider.bookingCredits || 0);
+        const creditsTotal = Number(provider.bookingCreditsTotal || 0);
+
+        // Pre-fill object for frontend to keep structure uniform
+        const prefillData = {
+            name: `${provider.firstName} ${provider.lastName}`.trim(),
+            email: provider.email || null,
+            contact: provider.mobile || null,
+        };
+
+        // ========================================================
+        // 1. CREDITS AVAILABLE LOGIC (NO RAZORPAY NEEDED)
+        // ========================================================
+        if (creditsLeft > 0) {
+            return res.status(200).json({
+                success: true,
                 message: 'You have a free booking credit available. Payment is not required.',
-                code: 'FREE_BOOKING_CREDIT_AVAILABLE',
-                bookingCredits: Number(provider.bookingCredits || 0),
+                paymentMode: 'CREDITS',
+                stats: {
+                    totalCount: creditsTotal,
+                    currentBalance: creditsLeft
+                },
+                data: {
+                    paymentId: null,
+                    offerId: offer._id,
+                    bookingId: booking._id,
+                    razorpayOrderId: null,
+                    razorpayKeyId: null,
+                    amount: 0,
+                    amountInPaise: null,
+                    currency: 'INR',
+                    name: 'Provider App',
+                    description: 'Free Booking via Credits',
+                    offerAmount: offer.offerAmount, // 👉 Added offerAmount
+                    prefill: prefillData,
+                }
             });
         }
 
+        // ========================================================
+        // 2. PAID BOOKING LOGIC
+        // ========================================================
         if (offer.distanceKm === null || offer.distanceKm === undefined) return res.status(400).json({ success: false, message: 'Booking distance is not available' });
 
         const accessFee = getBookingAccessFee({ distanceKm: offer.distanceKm });
@@ -503,16 +537,23 @@ const createBookingPaymentOrder = async (req, res) => {
                 success: true,
                 message: 'Dummy payment successful and booking approved',
                 paymentMode: 'DUMMY',
+                stats: {
+                    totalCount: creditsTotal,
+                    currentBalance: creditsLeft
+                },
                 data: {
                     paymentId: payment._id,
-                    dummyOrderId: payment.razorpayOrderId,
-                    dummyPaymentId: payment.razorpayPaymentId,
-                    bookingId: booking._id,
                     offerId: offer._id,
+                    bookingId: booking._id,
+                    razorpayOrderId: payment.razorpayOrderId,
+                    razorpayKeyId: null,
                     amount: accessFee,
+                    amountInPaise: Math.round(accessFee * 100),
                     currency: 'INR',
-                    booking: result.booking,
-                    offer: result.offer,
+                    name: 'Provider App',
+                    description: 'Dummy payment',
+                    offerAmount: offer.offerAmount, // 👉 Added offerAmount
+                    prefill: prefillData,
                 },
             });
         }
@@ -528,15 +569,23 @@ const createBookingPaymentOrder = async (req, res) => {
                 success: true,
                 message: 'Existing payment order found',
                 paymentMode: 'RAZORPAY',
+                stats: {
+                    totalCount: creditsTotal,
+                    currentBalance: creditsLeft
+                },
                 data: {
                     paymentId: existingPayment._id,
                     offerId: offer._id,
                     bookingId: booking._id,
                     razorpayOrderId: existingPayment.razorpayOrderId,
+                    razorpayKeyId: process.env.RAZORPAY_KEY_ID,
                     amount: existingPayment.amount,
                     amountInPaise: Math.round(Number(existingPayment.amount) * 100),
                     currency: existingPayment.currency,
-                    razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+                    name: 'Provider App',
+                    description: 'Booking access fee',
+                    offerAmount: offer.offerAmount, // 👉 Added offerAmount
+                    prefill: prefillData,
                 },
             });
         }
@@ -570,10 +619,14 @@ const createBookingPaymentOrder = async (req, res) => {
         offer.paymentStatus = 'PENDING';
         await offer.save();
 
-        return res.status(201).json({
+        return res.status(200).json({
             success: true,
             message: 'Payment order created successfully',
             paymentMode: 'RAZORPAY',
+            stats: {
+                totalCount: creditsTotal,
+                currentBalance: creditsLeft
+            },
             data: {
                 paymentId: payment._id,
                 offerId: offer._id,
@@ -585,11 +638,8 @@ const createBookingPaymentOrder = async (req, res) => {
                 currency: razorpayOrder.currency,
                 name: 'Provider App',
                 description: 'Booking access fee',
-                prefill: {
-                    name: `${provider.firstName} ${provider.lastName}`.trim(),
-                    email: provider.email,
-                    contact: provider.mobile,
-                },
+                offerAmount: offer.offerAmount, // 👉 Added offerAmount
+                prefill: prefillData,
             },
         });
     } catch (error) {
