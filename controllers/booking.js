@@ -493,7 +493,7 @@ module.exports = {
         }
     },
 
-    approveBookingOffer: async (req, res) => {
+   approveBookingOffer: async (req, res) => {
         try {
             const offer = await BookingOffer.findById(req.params.offerId).populate('booking');
             if (!offer || offer.provider.toString() !== req.user.id.toString()) return res.status(404).json({ success: false, message: 'Offer not found' });
@@ -681,14 +681,21 @@ module.exports = {
             }
 
             // ========================================================
-            // PAID BOOKING LOGIC
+            // PAID BOOKING LOGIC (FLAT PRICING)
             // ========================================================
-            const baseFee = Number(process.env.BOOKING_FEE_BASE || 20);
-            const perKmFee = Number(process.env.BOOKING_FEE_PER_KM || 5);
-            const accessFee = Number((baseFee + Number(distanceKm) * perKmFee).toFixed(2));
+            const startingKmRange = Number(process.env.STARTING_KM_RANGE || 10);
+            const startingRangePrice = Number(process.env.STARTING_RANGE_PRICE || 90);
+            const extraFlatPrice = Number(process.env.ABOVE_RANGE_PRICE || 40);
+
+            let accessFee = startingRangePrice;
+            
+            // If distance exceeds the starting range, add the extra flat price once
+            if (Number(distanceKm) > startingKmRange) {
+                accessFee += extraFlatPrice;
+            }
 
             offer.accessType = 'PAID';
-            offer.accessFee = accessFee;
+            offer.accessFee = Number(accessFee.toFixed(2));
             offer.paymentStatus = 'PENDING';
             // Status remains 1 (Accepted by User) until payment succeeds!
             await offer.save();
@@ -1056,6 +1063,9 @@ module.exports = {
     // ============================================================
     // BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
     // ============================================================
+   // ============================================================
+    // BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
+    // ============================================================
     getBookingDetails: async (req, res) => {
         try {
             const { id } = req.params;
@@ -1091,15 +1101,6 @@ module.exports = {
                         const [bLng, bLat] = booking.location.coordinates;
 
                         distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
-
-                        // --- DEBUG LOGS ---
-                        console.log('\n=============================================');
-                        console.log('📍 [API: Booking Details] DISTANCE CHECK');
-                        console.log(`Booking ID: ${booking._id}`);
-                        console.log(`   - Provider [Lng, Lat]: [${pLng}, ${pLat}]`);
-                        console.log(`   - Booking  [Lng, Lat]: [${bLng}, ${bLat}]`);
-                        console.log(`   - Calculated Distance: ${distanceKm} km`);
-                        console.log('=============================================\n');
                     }
 
                     booking.distanceKm = distanceKm;
@@ -1107,6 +1108,32 @@ module.exports = {
             }
 
             if (!hasAccess) return res.status(403).json({ success: false, message: 'Unauthorized' });
+
+            // 👇 NAYA CODE: FETCH AND INJECT OFFER DETAILS 👇
+            let relevantOffer = null;
+            
+            if (role === 0) {
+                // Customer ke liye: Jo offer accept/approve hua hai (Status 1 ya 3), wo uthao
+                relevantOffer = await BookingOffer.findOne({
+                    booking: booking._id,
+                    status: { $in: [1, 3] } 
+                }).lean();
+            } else if (role === 1) {
+                // Provider ke liye: Uska apna bheja hua offer uthao
+                relevantOffer = await BookingOffer.findOne({
+                    booking: booking._id,
+                    provider: userId
+                }).lean();
+            }
+
+            // In keys ko booking object mein attach kar do
+            booking.offerAmount = relevantOffer ? relevantOffer.offerAmount : null;
+            booking.offerId = relevantOffer ? relevantOffer._id : null;
+            booking.proposedDate = relevantOffer ? relevantOffer.proposedDate : null;
+            booking.proposedTime = relevantOffer ? relevantOffer.proposedTime : null;
+            booking.accessFee = relevantOffer ? relevantOffer.accessFee : null;
+            booking.offerStatus = relevantOffer ? relevantOffer.status : null;
+            // 👆 ========================================== 👆
 
             return res.status(200).json({ success: true, data: booking });
         } catch (error) {

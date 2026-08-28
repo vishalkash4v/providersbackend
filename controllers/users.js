@@ -1,9 +1,11 @@
 const ProviderProfile = require('../models/ProviderProfile');
+const Booking = require('../models/Booking');           // NAYA IMPORT
+const BookingOffer = require('../models/BookingOffer'); // NAYA IMPORT
 
 module.exports = {
 
   // ============================================================
-  // GET UNIQUE SERVICES FROM NEARBY PROVIDERS
+  // GET UNIQUE SERVICES FROM NEARBY PROVIDERS & USER OFFERS
   // ============================================================
   home: async (req, res) => {
     try {
@@ -149,20 +151,6 @@ module.exports = {
       // ============================================================
       // UNIQUE SERVICES
       // ============================================================
-      //
-      // Map prevents duplicate services.
-      //
-      // Example:
-      //
-      // Provider 1 -> Plumber
-      // Provider 2 -> Plumber
-      // Provider 3 -> Electrician
-      //
-      // Result:
-      //
-      // Plumber
-      // Electrician
-      //
       const uniqueServices = new Map();
 
       providers.forEach((provider) => {
@@ -204,26 +192,71 @@ module.exports = {
       // ============================================================
       // CONVERT MAP TO ARRAY
       // ============================================================
-      const services =
-        Array.from(
-          uniqueServices.values()
-        );
+      const services = Array.from(uniqueServices.values());
+
+      // ============================================================
+      // FETCH NEW & ACCEPTED OFFERS FOR THIS USER (SAFE CHECK ADDED)
+      // ============================================================
+      let newOffers = [];
+      let acceptedOffers = [];
+
+      // Check if user is logged in (req.user exists)
+      if (req.user && req.user.id) {
+          const userId = req.user.id;
+          
+          // Active bookings of the user
+          const userBookings = await Booking.find({ 
+              user: userId, 
+              deletedAt: null 
+          }).distinct('_id');
+
+          // 1. New Offers (Status: 0), Limit: 5
+          newOffers = await BookingOffer.find({
+              booking: { $in: userBookings },
+              status: 0 
+          })
+          .populate({
+              path: 'booking',
+              select: 'service description status address',
+              populate: { path: 'service', select: 'name image' }
+          })
+          .populate('provider', 'firstName lastName profileImage')
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .lean();
+
+          // 2. Accepted Offers (Status: 1), Limit: 5
+          acceptedOffers = await BookingOffer.find({
+              booking: { $in: userBookings },
+              status: 1 
+          })
+          .populate({
+              path: 'booking',
+              select: 'service description status address',
+              populate: { path: 'service', select: 'name image' }
+          })
+          .populate('provider', 'firstName lastName profileImage')
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .lean();
+      }
 
       // ============================================================
       // RESPONSE
       // ============================================================
       return res.status(200).json({
         success: true,
-        message:
-          'Nearby services fetched successfully',
+        message: 'Home data fetched successfully',
         radiusInKm: parsedRadius,
         count: services.length,
-        data: services,
+        data: services,               // Purana array as it is
+        newOffers: newOffers,         // Agar login nahi hai toh empty [] jayega
+        acceptedOffers: acceptedOffers // Agar login nahi hai toh empty [] jayega
       });
 
     } catch (error) {
       console.error(
-        'Get Nearby Services Error:',
+        'Get User Home Error:',
         error
       );
 
@@ -251,7 +284,6 @@ module.exports = {
     }
   },
 
-
-
-
+  // NOTE: Agar aapke is file mein baaki functions they (jaise notifications wagera),
+  // toh is block ke neeche wo add kar lena. Maine aapka bheja hua block poora complete kar diya hai.
 };

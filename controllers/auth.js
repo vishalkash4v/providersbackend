@@ -2153,56 +2153,46 @@ module.exports = {
   },
 
 
-  // ============================================================
+// ============================================================
   // LOGOUT
   // ============================================================
 
   logout: async (req, res) => {
     try {
-      const authHeader =
-        req.headers['authorization'];
-
-      const token =
-        authHeader &&
-        authHeader.split(' ')[1];
+      const authHeader = req.headers['authorization'];
+      const token = authHeader && authHeader.split(' ')[1];
+      
+      // Frontend se logout ke time fcm token lenge
+      const { deviceToken } = req.body; 
 
       if (token) {
         // Decode token to get expiry
-        const decoded =
-          jwt.decode(token);
-
-        if (
-          decoded &&
-          decoded.exp
-        ) {
+        const decoded = jwt.decode(token);
+        if (decoded && decoded.exp) {
           await TokenBlacklist.create({
             token,
-            expiresAt:
-              new Date(
-                decoded.exp * 1000
-              ),
+            expiresAt: new Date(decoded.exp * 1000),
           });
         }
       }
 
+      // 👇 NAYA CODE: Device Deactivation 👇
+      if (deviceToken) {
+          await removeUserDevice({
+              userId: req.user.id,
+              deviceToken: deviceToken
+          });
+      }
+
       return res.status(200).json({
         success: true,
-        message:
-          'Logged out successfully',
+        message: 'Logged out successfully',
       });
 
     } catch (error) {
-      console.error(
-        'Logout Error:',
-        error
-      );
-
+      console.error('Logout Error:', error);
       return res.status(500).json({
-        success: false,
-        message:
-          'Something went wrong',
-        error:
-          error.message,
+        success: false, message: 'Something went wrong', error: error.message,
       });
     }
   },

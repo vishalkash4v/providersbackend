@@ -28,18 +28,26 @@ const isRealPaymentMode = String(process.env.PAYMENT_MODE || 'false').toLowerCas
 // ============================================================
 // CALCULATE BOOKING ACCESS FEE
 // ============================================================
+// ============================================================
+// CALCULATE BOOKING ACCESS FEE (FLAT PRICING)
+// ============================================================
 const getBookingAccessFee = ({ distanceKm }) => {
     const distance = Number(distanceKm);
     if (!Number.isFinite(distance) || distance < 0) throw new Error('Invalid booking distance');
 
-    const baseFee = Number(process.env.BOOKING_FEE_BASE || 20);
-    const perKmFee = Number(process.env.BOOKING_FEE_PER_KM || 5);
-    const amount = Number((baseFee + distance * perKmFee).toFixed(2));
+    const startingKmRange = Number(process.env.STARTING_KM_RANGE || 10);
+    const startingRangePrice = Number(process.env.STARTING_RANGE_PRICE || 90);
+    const extraFlatPrice = Number(process.env.ABOVE_RANGE_PRICE || 40);
+
+    let amount = startingRangePrice;
+
+    if (distance > startingKmRange) {
+        amount += extraFlatPrice; // Add the flat fee for exceeding the range
+    }
 
     if (!Number.isFinite(amount) || amount <= 0) throw new Error('Invalid booking access fee');
-    return amount;
+    return Number(amount.toFixed(2));
 };
-
 // ============================================================
 // COMPLETE REFERRAL
 // ============================================================
