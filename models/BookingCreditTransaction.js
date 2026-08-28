@@ -17,6 +17,7 @@ const bookingCreditTransactionSchema =
           'REFERRAL_REWARD',
           'BOOKING_USED',
           'ADMIN_ADJUSTMENT',
+          'WELCOME_BONUS',
         ],
         required: true,
       },

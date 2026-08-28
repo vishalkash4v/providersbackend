@@ -6,7 +6,7 @@ const {
   generateToken,
 } = require('../middleware/jwt');
 const Notification = require('../models/Notification'); // Top par import zaroor check kar lena
-
+const { addBookingCredits } = require('../utils/bookingCredits');
 const sendEmail = require('../utils/sendEmail');
 const ProviderProfile = require('../models/ProviderProfile');
 const {
@@ -1524,6 +1524,18 @@ module.exports = {
           null;
 
         await user.save();
+
+        if (Number(user.role) === 1) { 
+            const welcomeBonus = Number(process.env.PROVIDER_WELCOME_CREDITS || 0);
+            if (welcomeBonus > 0) {
+                await addBookingCredits({
+                    providerId: user._id,
+                    amount: welcomeBonus,
+                    type: 'WELCOME_BONUS',
+                    description: 'Free credits on successful registration',
+                });
+            }
+        }
 
         const token =
           generateToken(user);
