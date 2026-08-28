@@ -42,8 +42,8 @@ const notifyUser = async ({
 
         const messaging = getMessaging();
         
-        // 👉 sendMulticast use hota hai ek saath multiple devices ko bhejne ke liye
-        const response = await messaging.sendMulticast(pushPayload);
+        // 🔥 NAYA CODE: sendMulticast is deprecated. Using sendEachForMulticast 🔥
+        const response = await messaging.sendEachForMulticast(pushPayload);
 
         console.log(`🔔 Push fired to ${userId}. Success: ${response.successCount}, Failed: ${response.failureCount}`);
 
