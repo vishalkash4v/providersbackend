@@ -1066,6 +1066,9 @@ module.exports = {
    // ============================================================
     // BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
     // ============================================================
+   // ============================================================
+    // BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
+    // ============================================================
     getBookingDetails: async (req, res) => {
         try {
             const { id } = req.params;
@@ -1085,6 +1088,22 @@ module.exports = {
             if (role === 0) {
                 hasAccess = booking.user && booking.user._id.toString() === userId;
                 booking.distanceKm = null;
+                
+                // Fetch provider location for the user if a provider is assigned
+                if (booking.provider && booking.provider._id) {
+                    const providerProfile = await ProviderProfile.findOne({ user: booking.provider._id }).select('location').lean();
+                    if (providerProfile && providerProfile.location) {
+                        booking.provider.location = providerProfile.location;
+                        
+                        // Calculate distance if both locations exist
+                        if(providerProfile.location.coordinates && booking.location && booking.location.coordinates){
+                            const [pLng, pLat] = providerProfile.location.coordinates;
+                            const [bLng, bLat] = booking.location.coordinates;
+                            booking.distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
+                        }
+                    }
+                }
+
             } else if (role === 1) {
                 const isAssigned = booking.provider && booking.provider._id.toString() === userId;
                 const isNotified = booking.notifiedProviders && booking.notifiedProviders.some(pId => pId.toString() === userId);
@@ -1109,7 +1128,7 @@ module.exports = {
 
             if (!hasAccess) return res.status(403).json({ success: false, message: 'Unauthorized' });
 
-            // 👇 NAYA CODE: FETCH AND INJECT OFFER DETAILS 👇
+            // 👇 FETCH AND INJECT OFFER DETAILS 👇
             let relevantOffer = null;
             
             if (role === 0) {
