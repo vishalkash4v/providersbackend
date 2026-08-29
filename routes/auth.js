@@ -42,4 +42,7 @@ router.delete('/notifications', authenticateToken, authController.clearAllNotifi
 
 // POST /api/auth/support
 router.post('/support', authenticateToken, authController.createSupportTicket);
+// ... existing auth routes ...
+// No JWT middleware needed if you want users to read policies before logging in
+router.get('/policy/:type', authController.getPolicyByType);
 module.exports = router;

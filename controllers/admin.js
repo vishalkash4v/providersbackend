@@ -8,6 +8,7 @@ const TokenBlacklist = require('../models/TokenBlacklist');
 const Support = require('../models/Support');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const Policy = require('../models/Policy');
 const { generateToken } = require('../middleware/jwt');
 const { validate } = require('../utils/fieldValidations');
 const { uploadSingleFile } = require('../utils/r2uploads');
@@ -411,6 +412,49 @@ module.exports = {
                 message: 'Something went wrong', 
                 error: error.message 
             });
+        }
+    },
+    // CREATE OR UPDATE (Upsert)
+    upsertPolicy: async (req, res) => {
+        try {
+            const { type, content } = req.body;
+            if (!type || !content) return res.status(400).json({ success: false, message: 'Type and content are required' });
+
+            const policyType = type.toUpperCase();
+            if (!['TERMS', 'PRIVACY'].includes(policyType)) {
+                return res.status(400).json({ success: false, message: 'Invalid policy type' });
+            }
+
+            const policy = await Policy.findOneAndUpdate(
+                { type: policyType },
+                { content },
+                { new: true, upsert: true } // Creates if it doesn't exist, updates if it does
+            );
+
+            return res.status(200).json({ success: true, message: 'Policy saved successfully', data: policy });
+        } catch (error) {
+            return res.status(500).json({ success: false, message: 'Error saving policy', error: error.message });
+        }
+    },
+
+    // READ ALL
+    getPolicies: async (req, res) => {
+        try {
+            const policies = await Policy.find().lean();
+            return res.status(200).json({ success: true, data: policies });
+        } catch (error) {
+            return res.status(500).json({ success: false, error: error.message });
+        }
+    },
+
+    // DELETE
+    deletePolicy: async (req, res) => {
+        try {
+            const { id } = req.params;
+            await Policy.findByIdAndDelete(id);
+            return res.status(200).json({ success: true, message: 'Policy deleted successfully' });
+        } catch (error) {
+            return res.status(500).json({ success: false, error: error.message });
         }
     },
 };

@@ -45,5 +45,9 @@ router.put('/services/:id', isAdmin, adminController.updateService);
 router.delete('/services/:id', isAdmin, adminController.deleteService);
 
 router.get('/support', isAdmin, adminController.getSupportTickets);
+// ... existing admin routes ...
+router.post('/policy', isAdmin, adminController.upsertPolicy); // Handles both Create & Update
+router.get('/policy', isAdmin, adminController.getPolicies);
+router.delete('/policy/:id', isAdmin, adminController.deletePolicy);
 
 module.exports = router;

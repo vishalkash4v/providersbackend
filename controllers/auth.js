@@ -9,6 +9,7 @@ const Notification = require('../models/Notification'); // Top par import zaroor
 const { addBookingCredits } = require('../utils/bookingCredits');
 const sendEmail = require('../utils/sendEmail');
 const ProviderProfile = require('../models/ProviderProfile');
+const Policy = require('../models/Policy');
 const {
   validate,
 } = require('../utils/fieldValidations');
@@ -1527,16 +1528,16 @@ module.exports = {
 
         await user.save();
 
-        if (Number(user.role) === 1) { 
-            const welcomeBonus = Number(process.env.PROVIDER_WELCOME_CREDITS || 0);
-            if (welcomeBonus > 0) {
-                await addBookingCredits({
-                    providerId: user._id,
-                    amount: welcomeBonus,
-                    type: 'WELCOME_BONUS',
-                    description: 'Free credits on successful registration',
-                });
-            }
+        if (Number(user.role) === 1) {
+          const welcomeBonus = Number(process.env.PROVIDER_WELCOME_CREDITS || 0);
+          if (welcomeBonus > 0) {
+            await addBookingCredits({
+              providerId: user._id,
+              amount: welcomeBonus,
+              type: 'WELCOME_BONUS',
+              description: 'Free credits on successful registration',
+            });
+          }
         }
 
         const token =
@@ -2167,7 +2168,7 @@ module.exports = {
   },
 
 
-// ============================================================
+  // ============================================================
   // LOGOUT
   // ============================================================
 
@@ -2175,9 +2176,9 @@ module.exports = {
     try {
       const authHeader = req.headers['authorization'];
       const token = authHeader && authHeader.split(' ')[1];
-      
+
       // Frontend se logout ke time fcm token lenge
-      const { deviceToken } = req.body; 
+      const { deviceToken } = req.body;
 
       if (token) {
         // Decode token to get expiry
@@ -2192,10 +2193,10 @@ module.exports = {
 
       // 👇 NAYA CODE: Device Deactivation 👇
       if (deviceToken) {
-          await removeUserDevice({
-              userId: req.user.id,
-              deviceToken: deviceToken
-          });
+        await removeUserDevice({
+          userId: req.user.id,
+          deviceToken: deviceToken
+        });
       }
 
       return res.status(200).json({
@@ -2300,93 +2301,107 @@ module.exports = {
   },
 
   // ============================================================
-    // DELETE SINGLE NOTIFICATION
-    // ============================================================
-    deleteNotification: async (req, res) => {
-        try {
-            const { notificationId } = req.params;
+  // DELETE SINGLE NOTIFICATION
+  // ============================================================
+  deleteNotification: async (req, res) => {
+    try {
+      const { notificationId } = req.params;
 
-            // Notification dhoondo aur delete karo, par ensure karo ki wo ishi user ki ho
-            const notification = await Notification.findOneAndDelete({
-                _id: notificationId,
-                user: req.user.id 
-            });
+      // Notification dhoondo aur delete karo, par ensure karo ki wo ishi user ki ho
+      const notification = await Notification.findOneAndDelete({
+        _id: notificationId,
+        user: req.user.id
+      });
 
-            if (!notification) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Notification not found'
-                });
-            }
+      if (!notification) {
+        return res.status(404).json({
+          success: false,
+          message: 'Notification not found'
+        });
+      }
 
-            return res.status(200).json({
-                success: true,
-                message: 'Notification deleted successfully'
-            });
+      return res.status(200).json({
+        success: true,
+        message: 'Notification deleted successfully'
+      });
 
-        } catch (error) {
-            console.error('Delete Notification Error:', error);
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message
-            });
-        }
-    },
+    } catch (error) {
+      console.error('Delete Notification Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Something went wrong',
+        error: error.message
+      });
+    }
+  },
 
-    // ============================================================
-    // CLEAR ALL NOTIFICATIONS (Delete All)
-    // ============================================================
-    clearAllNotifications: async (req, res) => {
-        try {
-            // Is user ki saari notifications DB se uda do
-            await Notification.deleteMany({ user: req.user.id });
+  // ============================================================
+  // CLEAR ALL NOTIFICATIONS (Delete All)
+  // ============================================================
+  clearAllNotifications: async (req, res) => {
+    try {
+      // Is user ki saari notifications DB se uda do
+      await Notification.deleteMany({ user: req.user.id });
 
-            return res.status(200).json({
-                success: true,
-                message: 'All notifications cleared successfully'
-            });
+      return res.status(200).json({
+        success: true,
+        message: 'All notifications cleared successfully'
+      });
 
-        } catch (error) {
-            console.error('Clear All Notifications Error:', error);
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message
-            });
-        }
-    },
+    } catch (error) {
+      console.error('Clear All Notifications Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Something went wrong',
+        error: error.message
+      });
+    }
+  },
 
-    createSupportTicket: async (req, res) => {
-        try {
-            const { subject, description } = req.body;
+  createSupportTicket: async (req, res) => {
+    try {
+      const { subject, description } = req.body;
 
-            if (!subject || !description) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: 'Subject and description are required' 
-                });
-            }
+      if (!subject || !description) {
+        return res.status(400).json({
+          success: false,
+          message: 'Subject and description are required'
+        });
+      }
 
-            const supportTicket = await Support.create({
-                user: req.user.id,
-                subject: subject.trim(),
-                description: description.trim(),
-            });
+      const supportTicket = await Support.create({
+        user: req.user.id,
+        subject: subject.trim(),
+        description: description.trim(),
+      });
 
-            return res.status(201).json({
-                success: true,
-                message: 'Your support request has been submitted successfully. Our team will contact you shortly.',
-                // data: supportTicket
-            });
-        } catch (error) {
-            console.error('Create Support Ticket Error:', error);
-            return res.status(500).json({ 
-                success: false, 
-                message: 'Something went wrong', 
-                error: error.message 
-            });
-        }
-    },
+      return res.status(201).json({
+        success: true,
+        message: 'Your support request has been submitted successfully. Our team will contact you shortly.',
+        // data: supportTicket
+      });
+    } catch (error) {
+      console.error('Create Support Ticket Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Something went wrong',
+        error: error.message
+      });
+    }
+  },
+  getPolicyByType: async (req, res) => {
+    try {
+      const { type } = req.params; // Pass 'TERMS' or 'PRIVACY' in the URL
+      const policy = await Policy.findOne({ type: type.toUpperCase() }).lean();
+
+      if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
+
+      return res.status(200).json({ success: true, data: policy });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  },
+
+
 
 };
