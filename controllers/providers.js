@@ -37,7 +37,14 @@ module.exports = {
                 .populate('services', '_id name image isActive')
                 .lean();
             
-            const myServicesArray = providerProfileData?.services || [];
+            // Extract the provider's set radius (default to 0 if not found)
+            const providerRadius = providerProfileData?.radius || 0;
+
+            // 👉 Inject radius into every service object
+            const myServicesArray = (providerProfileData?.services || []).map(service => ({
+                ...service,
+                radius: providerRadius
+            }));
             
             // Query filter ke liye sirf ID nikali hai taaki code na fate
             const mySelectedServiceIds = myServicesArray.map(service => service._id);
@@ -140,7 +147,7 @@ module.exports = {
                         currentBalance: currentBalance  // How many they can use right now
                     },
                     providerLocation: providerProfileData?.location || null,
-                    myServices: myServicesArray, // 👉 Added myServices array!
+                    myServices: myServicesArray, // 👉 Now contains { _id, name, image, isActive, radius }
                     newJobs: newJobs,
                     acceptedOffers: acceptedOffers
                 }
