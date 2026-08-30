@@ -2420,7 +2420,7 @@ module.exports = {
             // Unique fields modify kar do taaki same number/email se naya account ban sake
             const timestamp = Date.now();
             if (user.email) user.email = `deleted_${timestamp}_${user.email}`;
-            if (user.mobile) user.mobile = `deleted_${timestamp}_${user.mobile}`;
+            if (user.mobile) user.mobile = `N/A`;
             
             // Password hash hata do security ke liye
             user.password = `deleted_${timestamp}`;

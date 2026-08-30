@@ -90,7 +90,7 @@ const userSchema = new mongoose.Schema(
     mobile: {
       type: String,
       required: true,
-      unique: true,
+      // unique: true,
       trim: true,
     },
 
@@ -240,6 +240,12 @@ const userSchema = new mongoose.Schema(
 
     profileImage: {
       type: String,
+      default: null,
+    },
+    // 👇 YEH NAYA FIELD ADD KARNA HAI 👇
+    // ===================== SOFT DELETE =====================
+    deletedAt: {
+      type: Date,
       default: null,
     },
 
