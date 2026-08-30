@@ -2402,6 +2402,56 @@ module.exports = {
     }
   },
 
+  deleteAccount: async (req, res) => {
+        try {
+            const userId = req.user.id;
+            const user = await User.findById(userId);
+
+            if (!user || user.deletedAt) {
+                return res.status(404).json({ success: false, message: 'Account not found or already deleted' });
+            }
+
+            // ============================================================
+            // SOFT DELETE & ANONYMIZATION LOGIC
+            // ============================================================
+            user.isActive = false;
+            user.deletedAt = new Date();
+
+            // Unique fields modify kar do taaki same number/email se naya account ban sake
+            const timestamp = Date.now();
+            if (user.email) user.email = `deleted_${timestamp}_${user.email}`;
+            if (user.mobile) user.mobile = `deleted_${timestamp}_${user.mobile}`;
+            
+            // Password hash hata do security ke liye
+            user.password = `deleted_${timestamp}`;
+
+            await user.save();
+
+            // ============================================================
+            // HIDE PROVIDER PROFILE (IF ROLE IS 1)
+            // ============================================================
+            if (Number(user.role) === 1) {
+                await ProviderProfile.findOneAndUpdate(
+                    { user: userId },
+                    { $set: { isActive: false } }
+                );
+            }
+
+            // Optional: Agar aapke paas TokenBlacklist ka logic hai, toh token ko invalidate kar do
+            // const token = req.headers.authorization.split(' ')[1];
+            // await TokenBlacklist.create({ token });
+
+            return res.status(200).json({ 
+                success: true, 
+                message: 'Your account has been deleted successfully.' 
+            });
+            
+        } catch (error) {
+            console.error('Delete Account Error:', error);
+            return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
+        }
+    }
+
 
 
 };

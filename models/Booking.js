@@ -217,6 +217,11 @@ const bookingSchema = new mongoose.Schema(
                 ref: 'User',
             },
         ],
+
+        ignoredProviders: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
     },
 
     {

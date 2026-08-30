@@ -43,5 +43,6 @@ router.patch('/offers/:offerId/approve', authenticateToken, bookingController.ap
 
 // Provider: Cancel/Reject Offer (After user accepted)
 router.patch('/offers/:offerId/cancel', authenticateToken, bookingController.cancelBookingOffer);
-
+// PUT /api/booking/:id/remove
+router.post('/:id/remove', authenticateToken, bookingController.removeBookingRequest);
 module.exports = router;

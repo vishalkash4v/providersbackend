@@ -62,7 +62,9 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
             const providerId = profile.user._id.toString();
             const customerId = booking.user?._id ? booking.user._id.toString() : booking.user.toString();
             if (providerId === customerId) continue;
-
+            // 👇 NAYA CODE: Agar provider ne booking hide/remove ki hai, toh usko ignore karo 👇
+            const ignoredIds = (booking.ignoredProviders || []).map(id => id.toString());
+            if (ignoredIds.includes(providerId)) continue;
             if (!profile.location || !Array.isArray(profile.location.coordinates) || profile.location.coordinates.length !== 2) continue;
 
             const [providerLng, providerLat] = profile.location.coordinates;
@@ -424,7 +426,7 @@ module.exports = {
 
                 data: {
                     offerId: offer._id,
-                  providerApprovalExpiresAt: offer.providerApprovalExpiresAt.toISOString()
+                    providerApprovalExpiresAt: offer.providerApprovalExpiresAt.toISOString()
                 }
             });
 
@@ -493,7 +495,7 @@ module.exports = {
         }
     },
 
-   approveBookingOffer: async (req, res) => {
+    approveBookingOffer: async (req, res) => {
         try {
             const offer = await BookingOffer.findById(req.params.offerId).populate('booking');
             if (!offer || offer.provider.toString() !== req.user.id.toString()) return res.status(404).json({ success: false, message: 'Offer not found' });
@@ -564,7 +566,7 @@ module.exports = {
                     offer.status = 2; // 2 = REJECTED
                     offer.rejectionReason = 'Lost to another provider during finalization';
                     await offer.save();
-                    
+
                     return res.status(409).json({ success: false, bookingAlreadyAssigned: true, message: 'Another provider has already been assigned this booking.' });
                 }
 
@@ -608,10 +610,10 @@ module.exports = {
                 }
 
                 // 👇 Reject other pending offers and Notify them 👇
-                const losingOffersList = await BookingOffer.find({ 
-                    booking: booking._id, 
-                    _id: { $ne: offer._id }, 
-                    status: { $in: [0, 1] } 
+                const losingOffersList = await BookingOffer.find({
+                    booking: booking._id,
+                    _id: { $ne: offer._id },
+                    status: { $in: [0, 1] }
                 });
 
                 await BookingOffer.updateMany(
@@ -688,7 +690,7 @@ module.exports = {
             const extraFlatPrice = Number(process.env.ABOVE_RANGE_PRICE || 40);
 
             let accessFee = startingRangePrice;
-            
+
             // If distance exceeds the starting range, add the extra flat price once
             if (Number(distanceKm) > startingKmRange) {
                 accessFee += extraFlatPrice;
@@ -843,7 +845,7 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
     },
- // ============================================================
+    // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -977,7 +979,7 @@ module.exports = {
                     const finalOffer = userActiveOffers.find(o => o.booking.toString() === booking._id.toString());
 
                     // Default to offer's distance if available
-                    let calculatedDistance = finalOffer ? finalOffer.distanceKm : null; 
+                    let calculatedDistance = finalOffer ? finalOffer.distanceKm : null;
 
                     // 👇 NAYA CODE: Type 2 me Live Distance Calculate karna (Same as Provider) 👇
                     if (type === '2' && booking.provider && booking.provider._id) {
@@ -990,9 +992,9 @@ module.exports = {
                             calculatedDistance = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
                         }
                     }
-                    
+
                     booking.distanceKm = calculatedDistance; // 👉 Yahan Customer ko Live Distance mil jayega!
-                    
+
                     booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
 
                     booking.offerId = finalOffer ? finalOffer._id : null;
@@ -1063,10 +1065,10 @@ module.exports = {
     // ============================================================
     // BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
     // ============================================================
-   // ============================================================
+    // ============================================================
     // BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
     // ============================================================
-   // ============================================================
+    // ============================================================
     // BOOKING DETAILS (UNIFIED FOR USER & PROVIDER)
     // ============================================================
     getBookingDetails: async (req, res) => {
@@ -1088,15 +1090,15 @@ module.exports = {
             if (role === 0) {
                 hasAccess = booking.user && booking.user._id.toString() === userId;
                 booking.distanceKm = null;
-                
+
                 // Fetch provider location for the user if a provider is assigned
                 if (booking.provider && booking.provider._id) {
                     const providerProfile = await ProviderProfile.findOne({ user: booking.provider._id }).select('location').lean();
                     if (providerProfile && providerProfile.location) {
                         booking.provider.location = providerProfile.location;
-                        
+
                         // Calculate distance if both locations exist
-                        if(providerProfile.location.coordinates && booking.location && booking.location.coordinates){
+                        if (providerProfile.location.coordinates && booking.location && booking.location.coordinates) {
                             const [pLng, pLat] = providerProfile.location.coordinates;
                             const [bLng, bLat] = booking.location.coordinates;
                             booking.distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
@@ -1130,12 +1132,12 @@ module.exports = {
 
             // 👇 FETCH AND INJECT OFFER DETAILS 👇
             let relevantOffer = null;
-            
+
             if (role === 0) {
                 // Customer ke liye: Jo offer accept/approve hua hai (Status 1 ya 3), wo uthao
                 relevantOffer = await BookingOffer.findOne({
                     booking: booking._id,
-                    status: { $in: [1, 3] } 
+                    status: { $in: [1, 3] }
                 }).lean();
             } else if (role === 1) {
                 // Provider ke liye: Uska apna bheja hua offer uthao
@@ -1155,6 +1157,37 @@ module.exports = {
             // 👆 ========================================== 👆
 
             return res.status(200).json({ success: true, data: booking });
+        } catch (error) {
+            return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
+        }
+    },
+
+    removeBookingRequest: async (req, res) => {
+        try {
+            const { id } = req.params; // Booking ID
+            const userId = req.user.id;
+
+            if (Number(req.user.role) !== 1) {
+                return res.status(403).json({ success: false, message: 'Only providers can perform this action' });
+            }
+
+            const booking = await Booking.findById(id);
+            if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+            // 1. Remove from notifiedProviders (hides it from the New Requests list)
+            booking.notifiedProviders = booking.notifiedProviders.filter(
+                pId => pId.toString() !== userId.toString()
+            );
+
+            // 2. Add to ignoredProviders (prevents re-notifying on updates)
+            if (!booking.ignoredProviders) booking.ignoredProviders = [];
+            if (!booking.ignoredProviders.includes(userId)) {
+                booking.ignoredProviders.push(userId);
+            }
+
+            await booking.save();
+
+            return res.status(200).json({ success: true, message: 'Booking request removed from your list' });
         } catch (error) {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }

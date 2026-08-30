@@ -45,4 +45,6 @@ router.post('/support', authenticateToken, authController.createSupportTicket);
 // ... existing auth routes ...
 // No JWT middleware needed if you want users to read policies before logging in
 router.get('/policy/:type', authController.getPolicyByType);
+// DELETE /api/auth/delete-account
+router.post('/deleteAccount', authenticateToken, authController.deleteAccount);
 module.exports = router;
