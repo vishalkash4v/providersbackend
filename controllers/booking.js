@@ -169,6 +169,7 @@ module.exports = {
         try {
             const required = ['service', 'latitude', 'longitude'];
             if (validate(req, res, required)) return;
+            console.log('Booking Creation Request:', req.body);
 
             const { service: serviceId, description, materialRequired, materialOption, latitude, longitude, address, visitPreference, preferredDates, preferredTimeStart, preferredTimeEnd } = req.body;
             const userId = req.user.id;
