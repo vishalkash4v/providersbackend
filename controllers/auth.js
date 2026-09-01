@@ -2215,21 +2215,69 @@ module.exports = {
 
 
   //Common
-  // ============================================================
+ // ============================================================
   // GET USER/PROVIDER NOTIFICATIONS
   // ============================================================
   getNotifications: async (req, res) => {
     try {
-      const userId = req.user.id; // Token se user ID mil jayegi
+      const userId = req.user.id; 
 
-      // Database se is user ki notifications nikalo (Latest sabse upar, max 50)
-      const notifications = await Notification.find({ user: userId })
-        .sort({ createdAt: -1 }) // Nayi notifications pehle aayengi
-        .limit(50)               // Limit laga do taaki API fast rahe
+      // 1. Fetch notifications with strictPopulate: false to bypass schema restrictions
+      let notifications = await Notification.find({ user: userId })
+        .populate({
+            path: 'bookingId',
+            model: 'Booking',
+            select: 'service',
+            strictPopulate: false, // 👉 YEH ERROR KO ROKEGA
+            populate: {
+                path: 'service',
+                model: 'Service',
+                select: 'image',
+                strictPopulate: false
+            }
+        })
+        .populate({
+            path: 'booking', // In case the schema uses 'booking' instead of 'bookingId'
+            model: 'Booking',
+            select: 'service',
+            strictPopulate: false, // 👉 YEH ERROR KO ROKEGA
+            populate: {
+                path: 'service',
+                model: 'Service',
+                select: 'image',
+                strictPopulate: false
+            }
+        })
+        .sort({ createdAt: -1 }) 
+        .limit(50)               
         .lean();
 
-      // Optional: Agar 'isRead' status update karna ho toh yahan kar sakte ho
-      // await Notification.updateMany({ user: userId, isRead: false }, { $set: { isRead: true } });
+      // 2. Map through the array and inject `serviceImage`
+      notifications = notifications.map(notif => {
+          let serviceImage = null;
+
+          // Check if populated data exists in bookingId
+          if (notif.bookingId && notif.bookingId.service && notif.bookingId.service.image) {
+              serviceImage = notif.bookingId.service.image;
+          } 
+          // Or check if populated data exists in booking
+          else if (notif.booking && notif.booking.service && notif.booking.service.image) {
+              serviceImage = notif.booking.service.image;
+          }
+
+          // Convert populated object back to plain string ID to keep response clean
+          const cleanedBookingId = notif.bookingId 
+              ? (notif.bookingId._id || notif.bookingId) 
+              : (notif.booking ? (notif.booking._id || notif.booking) : null);
+
+          // Clean up the raw populated object keys and inject serviceImage
+          const finalNotif = { ...notif, serviceImage };
+          
+          if (finalNotif.bookingId) finalNotif.bookingId = cleanedBookingId;
+          if (finalNotif.booking) finalNotif.booking = cleanedBookingId;
+
+          return finalNotif;
+      });
 
       return res.status(200).json({
         success: true,
