@@ -26,18 +26,26 @@ home: async (req, res) => {
       if (parsedLongitude < -180 || parsedLongitude > 180) return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
       if (parsedRadius <= 0) return res.status(400).json({ success: false, message: 'Radius must be greater than 0' });
 
-      // ============================================================
-      // FIND NEARBY PROVIDERS
+    // ============================================================
+      // FIND NEARBY PROVIDERS (Safely Handled)
       // ============================================================
       const maxDistanceInMeters = parsedRadius * 1000;
-      const providers = await ProviderProfile.find({
-        location: {
-          $near: {
-            $geometry: { type: 'Point', coordinates: [parsedLongitude, parsedLatitude] },
-            $maxDistance: maxDistanceInMeters,
+      let providers = [];
+
+      try {
+        providers = await ProviderProfile.find({
+          location: {
+            $near: {
+              $geometry: { type: 'Point', coordinates: [parsedLongitude, parsedLatitude] },
+              $maxDistance: maxDistanceInMeters,
+            },
           },
-        },
-      }).populate({ path: 'services', select: '_id name image isActive', match: { isActive: true } }).select('services');
+        }).populate({ path: 'services', select: '_id name image isActive', match: { isActive: true } }).select('services');
+      } catch (geoError) {
+        // If the 2dsphere index is missing, log it but don't crash the API.
+        // It will just return 0 nearby providers and continue loading bookings.
+        console.warn('GeoNear Index missing or failed, defaulting to 0 nearby providers.');
+      }
 
       const uniqueServices = new Map();
       providers.forEach((provider) => {
