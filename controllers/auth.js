@@ -2222,13 +2222,13 @@ module.exports = {
     try {
       const userId = req.user.id; 
 
-      // 1. Fetch notifications with strictPopulate: false to bypass schema restrictions
+      // 1. Fetch notifications with strictPopulate: false
       let notifications = await Notification.find({ user: userId })
         .populate({
             path: 'bookingId',
             model: 'Booking',
             select: 'service',
-            strictPopulate: false, // 👉 YEH ERROR KO ROKEGA
+            strictPopulate: false,
             populate: {
                 path: 'service',
                 model: 'Service',
@@ -2237,10 +2237,10 @@ module.exports = {
             }
         })
         .populate({
-            path: 'booking', // In case the schema uses 'booking' instead of 'bookingId'
+            path: 'booking',
             model: 'Booking',
             select: 'service',
-            strictPopulate: false, // 👉 YEH ERROR KO ROKEGA
+            strictPopulate: false,
             populate: {
                 path: 'service',
                 model: 'Service',
@@ -2252,29 +2252,29 @@ module.exports = {
         .limit(50)               
         .lean();
 
-      // 2. Map through the array and inject `serviceImage`
+      // 2. Map through the array, inject `serviceImage`, and delete useless keys
       notifications = notifications.map(notif => {
           let serviceImage = null;
 
-          // Check if populated data exists in bookingId
           if (notif.bookingId && notif.bookingId.service && notif.bookingId.service.image) {
               serviceImage = notif.bookingId.service.image;
-          } 
-          // Or check if populated data exists in booking
-          else if (notif.booking && notif.booking.service && notif.booking.service.image) {
+          } else if (notif.booking && notif.booking.service && notif.booking.service.image) {
               serviceImage = notif.booking.service.image;
           }
 
-          // Convert populated object back to plain string ID to keep response clean
           const cleanedBookingId = notif.bookingId 
               ? (notif.bookingId._id || notif.bookingId) 
               : (notif.booking ? (notif.booking._id || notif.booking) : null);
 
-          // Clean up the raw populated object keys and inject serviceImage
           const finalNotif = { ...notif, serviceImage };
           
           if (finalNotif.bookingId) finalNotif.bookingId = cleanedBookingId;
           if (finalNotif.booking) finalNotif.booking = cleanedBookingId;
+
+          // 👇 YAHAN FALTU KEYS KO HATA DIYA GAYA HAI 👇
+          delete finalNotif.proposal;
+          delete finalNotif.service;
+          delete finalNotif.distanceInKm;
 
           return finalNotif;
       });
