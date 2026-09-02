@@ -1045,18 +1045,12 @@ module.exports = {
   // ============================================================
   // UPDATE PROFILE
   // ============================================================
-
   updateProfile: async (req, res) => {
     try {
-      const userId =
-        req.user.id;
+      const userId = req.user.id;
 
       if (!userId) {
-        return res.status(401).json({
-          success: false,
-          message:
-            'Unauthorized',
-        });
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
       }
 
       const {
@@ -1070,308 +1064,134 @@ module.exports = {
       } = req.body;
 
       // ====================== FIND USER ======================
-      const user =
-        await User.findById(
-          userId
-        );
+      const user = await User.findById(userId);
 
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message:
-            'User not found',
-        });
+        return res.status(404).json({ success: false, message: 'User not found' });
       }
 
       // ====================== EMAIL ======================
       if (email !== undefined) {
-        if (
-          !email ||
-          !email.trim()
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Email is required',
-          });
+        if (!email || !email.trim()) {
+          return res.status(400).json({ success: false, message: 'Email is required' });
         }
 
-        const normalizedEmail =
-          email
-            .trim()
-            .toLowerCase();
-
-        const existingEmail =
-          await User.findOne({
-            email:
-              normalizedEmail,
-            _id: {
-              $ne: userId,
-            },
-          });
+        const normalizedEmail = email.trim().toLowerCase();
+        const existingEmail = await User.findOne({
+          email: normalizedEmail,
+          _id: { $ne: userId },
+        });
 
         if (existingEmail) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Email already registered',
-          });
+          return res.status(400).json({ success: false, message: 'Email already registered' });
         }
 
-        user.email =
-          normalizedEmail;
+        user.email = normalizedEmail;
       }
 
       // ====================== MOBILE ======================
       if (mobile !== undefined) {
-        const normalizedMobile =
-          mobile.trim();
+        const normalizedMobile = mobile.trim();
 
-        if (
-          !/^[0-9]{10}$/.test(
-            normalizedMobile
-          )
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Please enter a valid 10 digit mobile number',
-          });
+        if (!/^[0-9]{10}$/.test(normalizedMobile)) {
+          return res.status(400).json({ success: false, message: 'Please enter a valid 10 digit mobile number' });
         }
 
-        const existingMobile =
-          await User.findOne({
-            mobile:
-              normalizedMobile,
-            _id: {
-              $ne: userId,
-            },
-          });
+        const existingMobile = await User.findOne({
+          mobile: normalizedMobile,
+          _id: { $ne: userId },
+        });
 
         if (existingMobile) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Mobile number already registered',
-          });
+          return res.status(400).json({ success: false, message: 'Mobile number already registered' });
         }
 
-        user.mobile =
-          normalizedMobile;
+        user.mobile = normalizedMobile;
       }
 
       // ====================== FIRST NAME ======================
       if (firstName !== undefined) {
-        if (
-          !firstName.trim()
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'First name is required',
-          });
-        }
-
-        user.firstName =
-          firstName.trim();
+        if (!firstName.trim()) return res.status(400).json({ success: false, message: 'First name is required' });
+        user.firstName = firstName.trim();
       }
 
       // ====================== LAST NAME ======================
       if (lastName !== undefined) {
-        if (
-          !lastName.trim()
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Last name is required',
-          });
-        }
-
-        user.lastName =
-          lastName.trim();
+        if (!lastName.trim()) return res.status(400).json({ success: false, message: 'Last name is required' });
+        user.lastName = lastName.trim();
       }
 
       // ====================== PROFILE IMAGE ======================
-      if (
-        req.files &&
-        req.files.profileImage
-      ) {
-        const uploaded =
-          await uploadSingleFile(
-            req,
-            'profileImage',
-            'uploads/profiles'
-          );
-
-        if (uploaded) {
-          user.profileImage =
-            uploaded.path;
-        }
+      if (req.files && req.files.profileImage) {
+        const uploaded = await uploadSingleFile(req, 'profileImage', 'uploads/profiles');
+        if (uploaded) user.profileImage = uploaded.path;
       }
 
       // ====================== LOCATION ======================
-      const hasLatitude =
-        latitude !== undefined &&
-        latitude !== null &&
-        latitude !== '';
+      const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
+      const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
+      const hasLocationName = locationName && locationName.trim() !== '';
 
-      const hasLongitude =
-        longitude !== undefined &&
-        longitude !== null &&
-        longitude !== '';
+      if (hasLatitude || hasLongitude || hasLocationName) {
+        const existingLocation = user.location;
+        let lat = existingLocation?.coordinates?.[1];
+        let lng = existingLocation?.coordinates?.[0];
 
-      const hasLocationName =
-        locationName &&
-        locationName.trim() !== '';
+        if (hasLatitude) lat = Number(latitude);
+        if (hasLongitude) lng = Number(longitude);
 
-      if (
-        hasLatitude ||
-        hasLongitude ||
-        hasLocationName
-      ) {
-        const existingLocation =
-          user.location;
-
-        let lat =
-          existingLocation
-            ?.coordinates?.[1];
-
-        let lng =
-          existingLocation
-            ?.coordinates?.[0];
-
-        if (hasLatitude) {
-          lat =
-            Number(latitude);
+        if (lat === undefined || lat === null || lng === undefined || lng === null) {
+          return res.status(400).json({ success: false, message: 'Both latitude and longitude are required when providing location' });
         }
 
-        if (hasLongitude) {
-          lng =
-            Number(longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
         }
 
-        if (
-          lat === undefined ||
-          lat === null ||
-          lng === undefined ||
-          lng === null
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Both latitude and longitude are required when providing location',
-          });
-        }
+        if (lat < -90 || lat > 90) return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
+        if (lng < -180 || lng > 180) return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
 
-        if (
-          !Number.isFinite(lat) ||
-          !Number.isFinite(lng)
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Latitude and longitude must be valid numbers',
-          });
-        }
-
-        if (
-          lat < -90 ||
-          lat > 90
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Latitude must be between -90 and 90',
-          });
-        }
-
-        if (
-          lng < -180 ||
-          lng > 180
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Longitude must be between -180 and 180',
-          });
-        }
-
-        user.location = {
-          type: 'Point',
-          coordinates: [
-            lng,
-            lat,
-          ],
-        };
+        user.location = { type: 'Point', coordinates: [lng, lat] };
 
         if (hasLocationName) {
-          user.location.name =
-            locationName.trim();
-        } else if (
-          existingLocation?.name
-        ) {
-          user.location.name =
-            existingLocation.name;
+          user.location.name = locationName.trim();
+        } else if (existingLocation?.name) {
+          user.location.name = existingLocation.name;
         }
       }
 
       // ====================== SAVE ======================
       await user.save();
 
+      // ====================== HAS WORK DETAILS CHECK ======================
+      let hasWorkDetails = false;
+      if (Number(user.role) === 1) {
+        const providerProfile = await ProviderProfile.findOne({ user: user._id }).select('_id services').lean();
+        hasWorkDetails = !!providerProfile && Array.isArray(providerProfile.services) && providerProfile.services.length > 0;
+      }
+
       // ====================== RESPONSE ======================
       return res.status(200).json({
         success: true,
-        message:
-          'Profile updated successfully',
+        message: 'Profile updated successfully',
         data: {
-          userId:
-            user._id,
-
-          firstName:
-            user.firstName,
-
-          lastName:
-            user.lastName,
-
-          email:
-            user.email,
-
-          mobile:
-            user.mobile,
-
-          role:
-            user.role,
-
-          referralCode:
-            user.referralCode,
-
-          referredBy:
-            user.referredBy,
-
-          profileImage:
-            user.profileImage,
-
-          location:
-            user.location || null,
-
-          isVerified:
-            user.isVerified,
+          userId: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          mobile: user.mobile,
+          role: user.role,
+          referralCode: user.referralCode,
+          referredBy: user.referredBy,
+          profileImage: user.profileImage,
+          location: user.location || null,
+          isVerified: user.isVerified,
+          hasWorkDetails // Added here
         },
       });
     } catch (error) {
-      console.error(
-        'Update Profile Error:',
-        error
-      );
-
-      return res.status(500).json({
-        success: false,
-        message:
-          'Something went wrong',
-        error:
-          error.message,
-      });
+      console.error('Update Profile Error:', error);
+      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
     }
   },
 
@@ -2041,42 +1861,35 @@ module.exports = {
   // GET LOGGED-IN USER
   // ============================================================
 
-  getMe: async (req, res) => {
+getMe: async (req, res) => {
     try {
-      const user =
-        await User.findById(
-          req.user.id
-        ).select(
-          '-password -otp -otpExpires'
-        );
+      // Added .lean() to allow direct modification of the user object
+      const user = await User.findById(req.user.id)
+        .select('-password -otp -otpExpires')
+        .lean();
 
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message:
-            'User not found',
-        });
+        return res.status(404).json({ success: false, message: 'User not found' });
       }
+
+      // ====================== HAS WORK DETAILS CHECK ======================
+      let hasWorkDetails = false;
+      if (Number(user.role) === 1) {
+        const providerProfile = await ProviderProfile.findOne({ user: user._id }).select('_id services').lean();
+        hasWorkDetails = !!providerProfile && Array.isArray(providerProfile.services) && providerProfile.services.length > 0;
+      }
+      
+      // Inject flag into response data
+      user.hasWorkDetails = hasWorkDetails;
 
       return res.status(200).json({
         success: true,
-        data:
-          user,
+        data: user,
       });
 
     } catch (error) {
-      console.error(
-        'Get Me Error:',
-        error
-      );
-
-      return res.status(500).json({
-        success: false,
-        message:
-          'Something went wrong',
-        error:
-          error.message,
-      });
+      console.error('Get Me Error:', error);
+      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
     }
   },
 
@@ -2215,68 +2028,68 @@ module.exports = {
 
 
   //Common
- // ============================================================
+  // ============================================================
   // GET USER/PROVIDER NOTIFICATIONS
   // ============================================================
   getNotifications: async (req, res) => {
     try {
-      const userId = req.user.id; 
+      const userId = req.user.id;
 
       // 1. Fetch notifications with strictPopulate: false
       let notifications = await Notification.find({ user: userId })
         .populate({
-            path: 'bookingId',
-            model: 'Booking',
-            select: 'service',
-            strictPopulate: false,
-            populate: {
-                path: 'service',
-                model: 'Service',
-                select: 'image',
-                strictPopulate: false
-            }
+          path: 'bookingId',
+          model: 'Booking',
+          select: 'service',
+          strictPopulate: false,
+          populate: {
+            path: 'service',
+            model: 'Service',
+            select: 'image',
+            strictPopulate: false
+          }
         })
         .populate({
-            path: 'booking',
-            model: 'Booking',
-            select: 'service',
-            strictPopulate: false,
-            populate: {
-                path: 'service',
-                model: 'Service',
-                select: 'image',
-                strictPopulate: false
-            }
+          path: 'booking',
+          model: 'Booking',
+          select: 'service',
+          strictPopulate: false,
+          populate: {
+            path: 'service',
+            model: 'Service',
+            select: 'image',
+            strictPopulate: false
+          }
         })
-        .sort({ createdAt: -1 }) 
-        .limit(50)               
+        .sort({ createdAt: -1 })
+        .limit(50)
         .lean();
 
       // 2. Map through the array, inject `serviceImage`, and delete useless keys
       notifications = notifications.map(notif => {
-          let serviceImage = null;
+        let serviceImage = null;
 
-          if (notif.bookingId && notif.bookingId.service && notif.bookingId.service.image) {
-              serviceImage = notif.bookingId.service.image;
-          } else if (notif.booking && notif.booking.service && notif.booking.service.image) {
-              serviceImage = notif.booking.service.image;
-          }
+        if (notif.bookingId && notif.bookingId.service && notif.bookingId.service.image) {
+          serviceImage = notif.bookingId.service.image;
+        } else if (notif.booking && notif.booking.service && notif.booking.service.image) {
+          serviceImage = notif.booking.service.image;
+        }
 
-          const cleanedBookingId = notif.bookingId 
-              ? (notif.bookingId._id || notif.bookingId) 
-              : (notif.booking ? (notif.booking._id || notif.booking) : null);
+        const cleanedBookingId = notif.bookingId
+          ? (notif.bookingId._id || notif.bookingId)
+          : (notif.booking ? (notif.booking._id || notif.booking) : null);
 
-          const finalNotif = { ...notif, serviceImage };
-          
-          if (finalNotif.bookingId) finalNotif.bookingId = cleanedBookingId;
-          if (finalNotif.booking) finalNotif.booking = cleanedBookingId;
+        const finalNotif = { ...notif, serviceImage };
 
-          // 👇 YAHAN FALTU KEYS KO HATA DIYA GAYA HAI 👇
-          delete finalNotif.proposal;
-          delete finalNotif.service;
-          delete finalNotif.distanceInKm;
+        if (finalNotif.bookingId) finalNotif.bookingId = cleanedBookingId;
+        if (finalNotif.booking) finalNotif.booking = cleanedBookingId;
 
-          return finalNotif;
+        // 👇 YAHAN FALTU KEYS KO HATA DIYA GAYA HAI 👇
+        delete finalNotif.proposal;
+        delete finalNotif.service;
+        delete finalNotif.distanceInKm;
+
+        return finalNotif;
       });
 
       return res.status(200).json({
@@ -2451,54 +2264,54 @@ module.exports = {
   },
 
   deleteAccount: async (req, res) => {
-        try {
-            const userId = req.user.id;
-            const user = await User.findById(userId);
+    try {
+      const userId = req.user.id;
+      const user = await User.findById(userId);
 
-            if (!user || user.deletedAt) {
-                return res.status(404).json({ success: false, message: 'Account not found or already deleted' });
-            }
+      if (!user || user.deletedAt) {
+        return res.status(404).json({ success: false, message: 'Account not found or already deleted' });
+      }
 
-            // ============================================================
-            // SOFT DELETE & ANONYMIZATION LOGIC
-            // ============================================================
-            user.isActive = false;
-            user.deletedAt = new Date();
+      // ============================================================
+      // SOFT DELETE & ANONYMIZATION LOGIC
+      // ============================================================
+      user.isActive = false;
+      user.deletedAt = new Date();
 
-            // Unique fields modify kar do taaki same number/email se naya account ban sake
-            const timestamp = Date.now();
-            if (user.email) user.email = `deleted_${timestamp}_${user.email}`;
-            if (user.mobile) user.mobile = `N/A`;
-            
-            // Password hash hata do security ke liye
-            user.password = `deleted_${timestamp}`;
+      // Unique fields modify kar do taaki same number/email se naya account ban sake
+      const timestamp = Date.now();
+      if (user.email) user.email = `deleted_${timestamp}_${user.email}`;
+      if (user.mobile) user.mobile = `N/A`;
 
-            await user.save();
+      // Password hash hata do security ke liye
+      user.password = `deleted_${timestamp}`;
 
-            // ============================================================
-            // HIDE PROVIDER PROFILE (IF ROLE IS 1)
-            // ============================================================
-            if (Number(user.role) === 1) {
-                await ProviderProfile.findOneAndUpdate(
-                    { user: userId },
-                    { $set: { isActive: false } }
-                );
-            }
+      await user.save();
 
-            // Optional: Agar aapke paas TokenBlacklist ka logic hai, toh token ko invalidate kar do
-            // const token = req.headers.authorization.split(' ')[1];
-            // await TokenBlacklist.create({ token });
+      // ============================================================
+      // HIDE PROVIDER PROFILE (IF ROLE IS 1)
+      // ============================================================
+      if (Number(user.role) === 1) {
+        await ProviderProfile.findOneAndUpdate(
+          { user: userId },
+          { $set: { isActive: false } }
+        );
+      }
 
-            return res.status(200).json({ 
-                success: true, 
-                message: 'Your account has been deleted successfully.' 
-            });
-            
-        } catch (error) {
-            console.error('Delete Account Error:', error);
-            return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
-        }
+      // Optional: Agar aapke paas TokenBlacklist ka logic hai, toh token ko invalidate kar do
+      // const token = req.headers.authorization.split(' ')[1];
+      // await TokenBlacklist.create({ token });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Your account has been deleted successfully.'
+      });
+
+    } catch (error) {
+      console.error('Delete Account Error:', error);
+      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
     }
+  }
 
 
 
