@@ -391,6 +391,7 @@ module.exports = {
     // OFFERS MANAGEMENT
     // ============================================================
     // ============================================================
+  // ============================================================
     // CREATE BOOKING OFFER (Supports Resubmission)
     // ============================================================
     createBookingOffer: async (req, res) => {
@@ -427,6 +428,23 @@ module.exports = {
                     offer.userAcceptedAt = null;
                     offer.providerApprovalExpiresAt = null;
                     await offer.save();
+
+                    // 👇 NAYA CODE: Resubmit hone par customer ko notification bhejo 👇
+                    try {
+                        await notifyUser({
+                            userId: booking.user._id || booking.user, 
+                            type: 'NEW_OFFER_RECEIVED',
+                            title: 'Offer Resubmitted! 🔄',
+                            message: `A provider has sent a revised offer of ₹${amount} for your service request.`,
+                            bookingId: booking._id,
+                            data: {
+                                offerId: offer._id
+                            }
+                        });
+                    } catch (notifyErr) {
+                        console.error('Notification failed on resubmit:', notifyErr);
+                    }
+                    // 👆 ======================================================= 👆
 
                     return res.status(200).json({ success: true, message: 'Offer resubmitted successfully', data: offer });
                 } else {
@@ -939,6 +957,9 @@ module.exports = {
     // ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
+ // ============================================================
+    // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
+    // ============================================================
     getMyBookings: async (req, res) => {
         try {
             const { type } = req.query;
@@ -1072,7 +1093,6 @@ module.exports = {
                     // Default to offer's distance if available
                     let calculatedDistance = finalOffer ? finalOffer.distanceKm : null;
 
-                    // 👇 NAYA CODE: Type 2 me Live Distance Calculate karna (Same as Provider) 👇
                     if (type === '2' && booking.provider && booking.provider._id) {
                         const pLoc = providerLocationMap[booking.provider._id.toString()];
                         booking.provider.location = pLoc || null;
@@ -1084,22 +1104,32 @@ module.exports = {
                         }
                     }
 
-                    booking.distanceKm = calculatedDistance; // 👉 Yahan Customer ko Live Distance mil jayega!
-
+                    booking.distanceKm = calculatedDistance; 
                     booking.newStatus = pendingOffersBookingIds.includes(booking._id.toString()) ? 1 : 0;
-
                     booking.offerId = finalOffer ? finalOffer._id : null;
                     booking.offerAmount = finalOffer ? finalOffer.offerAmount : null;
                     booking.proposedDate = finalOffer ? finalOffer.proposedDate : null;
                     booking.proposedTime = finalOffer ? finalOffer.proposedTime : null;
                     booking.accessFee = finalOffer ? finalOffer.accessFee : null;
                     booking.offerStatus = finalOffer ? finalOffer.status : null;
-
                     booking.providerApprovalExpiresAt = null;
                     booking.creditsLeft = null;
 
                     return booking;
                 });
+
+                // 👇 NAYA CODE: CUSTOM SORTING FOR CUSTOMER (TYPE 0) 👇
+                if (type === '0') {
+                    bookings.sort((a, b) => {
+                        // 1. Jinke pass naye offers hain (newStatus: 1) wo upar aayenge
+                        if (b.newStatus !== a.newStatus) {
+                            return b.newStatus - a.newStatus;
+                        }
+                        // 2. Baaki sab createdAt ke hisaab se descending order mein (newest first)
+                        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+                    });
+                }
+                // 👆 ================================================ 👆
 
             } else if (role === 1) {
                 // --- PROVIDER SIDE ---
@@ -1118,7 +1148,6 @@ module.exports = {
                     booking.offerId = myOffer ? myOffer._id : null;
                     booking.providerApprovalExpiresAt = (myOffer && myOffer.status === 1) ? myOffer.providerApprovalExpiresAt : null;
                     booking.creditsLeft = creditsLeft;
-
                     booking.offerAmount = myOffer ? myOffer.offerAmount : null;
                     booking.proposedDate = myOffer ? myOffer.proposedDate : null;
                     booking.proposedTime = myOffer ? myOffer.proposedTime : null;
