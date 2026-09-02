@@ -45,4 +45,6 @@ router.patch('/offers/:offerId/approve', authenticateToken, bookingController.ap
 router.patch('/offers/:offerId/cancel', authenticateToken, bookingController.cancelBookingOffer);
 // PUT /api/booking/:id/remove
 router.post('/:id/remove', authenticateToken, bookingController.removeBookingRequest);
+// GET /api/booking/offer/:id
+router.get('/offer/:id', authenticateToken, bookingController.getOfferDetails);
 module.exports = router;

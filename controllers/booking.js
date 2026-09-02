@@ -1283,4 +1283,81 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }
     },
+
+
+    // ============================================================
+    // GET OFFER DETAILS (UNIFIED FOR USER & PROVIDER)
+    // ============================================================
+    getOfferDetails: async (req, res) => {
+        try {
+            const { id } = req.params; // Offer ID
+            const userId = req.user.id.toString();
+            const role = Number(req.user.role);
+
+            // 1. Fetch Offer & Populate related data
+            let offer = await BookingOffer.findById(id)
+                .populate({
+                    path: 'booking',
+                    populate: [
+                        { path: 'service', select: 'name image' },
+                        { path: 'user', select: 'firstName lastName mobile email profileImage' }
+                    ]
+                })
+                .populate('provider', 'firstName lastName mobile email profileImage')
+                .lean();
+
+            if (!offer) {
+                return res.status(404).json({ success: false, message: 'Offer not found' });
+            }
+
+            // 2. Role-Based Access Validation
+            let hasAccess = false;
+            
+            if (role === 0) {
+                // Customer: Should only see offers made on their own bookings
+                hasAccess = offer.booking && offer.booking.user && offer.booking.user._id.toString() === userId;
+            } else if (role === 1) {
+                // Provider: Should only see offers they created
+                hasAccess = offer.provider && offer.provider._id.toString() === userId;
+            }
+
+            if (!hasAccess) {
+                return res.status(403).json({ success: false, message: 'Unauthorized access to this offer' });
+            }
+
+            // 3. Inject Provider Location & Calculate Live Distance
+            let distanceKm = offer.distanceKm || null; 
+
+            if (offer.provider && offer.provider._id && offer.booking && offer.booking.location) {
+                const providerProfile = await ProviderProfile.findOne({ user: offer.provider._id }).select('location').lean();
+                
+                if (providerProfile && providerProfile.location) {
+                    offer.provider.location = providerProfile.location; 
+
+                    if (providerProfile.location.coordinates && offer.booking.location.coordinates) {
+                        const [pLng, pLat] = providerProfile.location.coordinates;
+                        const [bLng, bLat] = offer.booking.location.coordinates;
+                        
+                        distanceKm = Number(calculateDistance(bLat, bLng, pLat, pLng).toFixed(2));
+                        offer.distanceKm = distanceKm; 
+                    }
+                }
+            }
+
+            // 4. Send Response
+            return res.status(200).json({
+                success: true,
+                message: 'Offer details fetched successfully',
+                data: offer
+            });
+
+        } catch (error) {
+            console.error('Get Offer Details Error:', error);
+            return res.status(500).json({ 
+                success: false, 
+                message: 'Something went wrong', 
+                error: error.message 
+            });
+        }
+    },
 };
