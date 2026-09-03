@@ -22,6 +22,7 @@ const paymentRouter = require('./routes/payment');
 const extrasRouter = require('./routes/extras');
 const adminRouter = require('./routes/admin'); // 👉 Admin router import karo
 const namezivoRouter = require('./routes/namezivo'); // 👉 Namezivo router import karo
+const kycRouter = require('./routes/kyc'); // 👉 KYC router import karo
 const { connectDB } = require('./utils/db');
 
 const app = express();
@@ -238,6 +239,8 @@ app.use(
 app.use('/api/admin', adminRouter);
 
 app.use('/api/namezivo',namezivoRouter);
+
+app.use('/api/kyc', kycRouter); // 👉 KYC router use karo
 
 // ============================================================
 // UPLOADS STATIC

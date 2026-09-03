@@ -242,6 +242,18 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+
+
+    profileImageHistory: [{
+      image: { type: String, required: true },
+      status: { type: Number, default: 0 }, // 0 = Pending, 1 = Approved, 2 = Rejected
+      rejectionReason: { type: String, default: null },
+      submittedAt: { type: Date, default: Date.now },
+      reviewedAt: { type: Date, default: null }
+    }],
+
+
+
     // 👇 YEH NAYA FIELD ADD KARNA HAI 👇
     // ===================== SOFT DELETE =====================
     deletedAt: {

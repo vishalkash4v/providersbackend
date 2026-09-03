@@ -47,4 +47,5 @@ router.post('/support', authenticateToken, authController.createSupportTicket);
 router.get('/policy/:type', authController.getPolicyByType);
 // DELETE /api/auth/delete-account
 router.post('/deleteAccount', authenticateToken, authController.deleteAccount);
+router.get('/testOtp', authController.testOtp);
 module.exports = router;

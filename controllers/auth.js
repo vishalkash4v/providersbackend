@@ -13,6 +13,10 @@ const Policy = require('../models/Policy');
 const {
   validate,
 } = require('../utils/fieldValidations');
+  const axios = require("axios");
+
+      const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
+      const sendSms = require('../utils/sendSms');
 
 const {
   generateReferralCode,
@@ -32,7 +36,7 @@ module.exports = {
   // REGISTER
   // ============================================================
 
-  register: async (req, res) => {
+ register: async (req, res) => {
     try {
       // ============================================================
       // REQUIRED FIELDS
@@ -64,47 +68,30 @@ module.exports = {
         longitude,
         locationName,
         referralCode: enteredReferralCode,
+        
+        // 👇 ACCEPTING IMAGE AS A DIRECT STRING (Base64 or URL) 👇
+        profileImage, 
 
         // ==========================================================
         // OPTIONAL DEVICE FIELDS
         // ==========================================================
 
         deviceToken,
-
-        // 0 = Android
-        // 1 = iOS
-        // Default = Android
         deviceType = 0,
       } = req.body;
-
-      // ============================================================
-      // PASSWORD MATCH
-      // ============================================================
-
-
 
       // ============================================================
       // NORMALIZE EMAIL / MOBILE
       // ============================================================
 
-      const normalizedEmail =
-        email.trim().toLowerCase();
-
-      const normalizedMobile =
-        mobile.trim();
-
-      // ============================================================
-      // DEVICE TYPE VALIDATION
-      // ============================================================
-
-      const normalizedDeviceType =
-        Number(deviceType);
+      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedMobile = mobile.trim();
+      const normalizedDeviceType = Number(deviceType);
 
       if (![0, 1].includes(normalizedDeviceType)) {
         return res.status(400).json({
           success: false,
-          message:
-            'Invalid device type. Use 0 for Android or 1 for iOS',
+          message: 'Invalid device type. Use 0 for Android or 1 for iOS',
         });
       }
 
@@ -112,447 +99,166 @@ module.exports = {
       // FIND EXISTING USERS
       // ============================================================
 
-      const existingEmailUser =
-        await User.findOne({
-          email: normalizedEmail,
-        });
-
-      const existingMobileUser =
-        await User.findOne({
-          mobile: normalizedMobile,
-        });
+      const existingEmailUser = await User.findOne({ email: normalizedEmail });
+      const existingMobileUser = await User.findOne({ mobile: normalizedMobile });
 
       // ============================================================
-      // VERIFIED EMAIL
+      // VERIFIED VALIDATIONS
       // ============================================================
 
-      if (
-        existingEmailUser &&
-        existingEmailUser.isVerified
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email already registered',
-        });
+      if (existingEmailUser && existingEmailUser.isVerified) {
+        return res.status(400).json({ success: false, message: 'Email already registered' });
       }
 
-      // ============================================================
-      // VERIFIED MOBILE
-      // ============================================================
-
-      if (
-        existingMobileUser &&
-        existingMobileUser.isVerified
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: 'Mobile number already registered',
-        });
+      if (existingMobileUser && existingMobileUser.isVerified) {
+        return res.status(400).json({ success: false, message: 'Mobile number already registered' });
       }
-
-      // ============================================================
-      // EMAIL AND MOBILE BELONG TO DIFFERENT USERS
-      // ============================================================
 
       if (
         existingEmailUser &&
         existingMobileUser &&
-        existingEmailUser._id.toString() !==
-        existingMobileUser._id.toString()
+        existingEmailUser._id.toString() !== existingMobileUser._id.toString()
       ) {
         return res.status(400).json({
           success: false,
-          message:
-            'Email and Mobile number are associated with different accounts',
+          message: 'Email and Mobile number are associated with different accounts',
         });
       }
 
-      // ============================================================
-      // EXISTING UNVERIFIED USER
-      // ============================================================
-
-      const existingUser =
-        existingEmailUser ||
-        existingMobileUser;
+      const existingUser = existingEmailUser || existingMobileUser;
 
       // ============================================================
       // REFERRAL
       // ============================================================
 
-      let referredBy =
-        existingUser?.referredBy || null;
+      let referredBy = existingUser?.referredBy || null;
 
-      if (
-        enteredReferralCode &&
-        enteredReferralCode.trim() !== ''
-      ) {
-        const normalizedReferralCode =
-          enteredReferralCode
-            .trim()
-            .toUpperCase();
-
-        const referringUser =
-          await User.findOne({
-            referralCode:
-              normalizedReferralCode,
-            isActive: true,
-          });
+      if (enteredReferralCode && enteredReferralCode.trim() !== '') {
+        const normalizedReferralCode = enteredReferralCode.trim().toUpperCase();
+        const referringUser = await User.findOne({
+          referralCode: normalizedReferralCode,
+          isActive: true,
+        });
 
         if (!referringUser) {
-          return res.status(400).json({
-            success: false,
-            message: 'Invalid referral code',
-          });
+          return res.status(400).json({ success: false, message: 'Invalid referral code' });
         }
 
-        // User cannot refer himself
-        if (
-          existingUser &&
-          referringUser._id.toString() ===
-          existingUser._id.toString()
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'You cannot use your own referral code',
-          });
+        if (existingUser && referringUser._id.toString() === existingUser._id.toString()) {
+          return res.status(400).json({ success: false, message: 'You cannot use your own referral code' });
         }
-
-        referredBy =
-          referringUser._id;
+        referredBy = referringUser._id;
       }
 
       // ============================================================
       // LOCATION
       // ============================================================
 
-      let location =
-        existingUser?.location || null;
+      let location = existingUser?.location || null;
+      const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
+      const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
+      const hasLocationName = locationName && locationName.trim() !== '';
 
-      const hasLatitude =
-        latitude !== undefined &&
-        latitude !== null &&
-        latitude !== '';
-
-      const hasLongitude =
-        longitude !== undefined &&
-        longitude !== null &&
-        longitude !== '';
-
-      const hasLocationName =
-        locationName &&
-        locationName.trim() !== '';
-
-      if (
-        hasLatitude ||
-        hasLongitude ||
-        hasLocationName
-      ) {
-        if (
-          !hasLatitude ||
-          !hasLongitude
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Both latitude and longitude are required when providing location',
-          });
+      if (hasLatitude || hasLongitude || hasLocationName) {
+        if (!hasLatitude || !hasLongitude) {
+          return res.status(400).json({ success: false, message: 'Both latitude and longitude are required when providing location' });
         }
 
-        const lat =
-          Number(latitude);
+        const lat = Number(latitude);
+        const lng = Number(longitude);
 
-        const lng =
-          Number(longitude);
-
-        if (
-          !Number.isFinite(lat) ||
-          !Number.isFinite(lng)
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Latitude and longitude must be valid numbers',
-          });
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
+        }
+        if (lat < -90 || lat > 90) {
+          return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
+        }
+        if (lng < -180 || lng > 180) {
+          return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
         }
 
-        if (
-          lat < -90 ||
-          lat > 90
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Latitude must be between -90 and 90',
-          });
-        }
-
-        if (
-          lng < -180 ||
-          lng > 180
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Longitude must be between -180 and 180',
-          });
-        }
-
-        location = {
-          type: 'Point',
-          coordinates: [
-            lng,
-            lat,
-          ],
-        };
-
-        if (hasLocationName) {
-          location.name =
-            locationName.trim();
-        }
+        location = { type: 'Point', coordinates: [lng, lat] };
+        if (hasLocationName) location.name = locationName.trim();
       }
 
       // ============================================================
-      // PROFILE IMAGE
+      // PROFILE IMAGE LOGIC (MULTIPART REMOVED)
       // ============================================================
-
-      let profileImage =
-        existingUser?.profileImage ||
-        null;
-
-      if (
-        req.files &&
-        req.files.profileImage
-      ) {
-        const uploaded =
-          await uploadSingleFile(
-            req,
-            'profileImage',
-            'uploads/profiles'
-          );
-
-        if (uploaded) {
-          profileImage =
-            uploaded.path;
-        }
-      }
+      
+      const finalProfileImage = profileImage || existingUser?.profileImage || '';
 
       // ============================================================
-      // PASSWORD
+      // PASSWORD & OTP
       // ============================================================
 
-      const hashedPassword =
-        await bcrypt.hash(
-          password,
-          12
-        );
+      const hashedPassword = await bcrypt.hash(password, 12);
+      const otp = Math.floor(1000 + Math.random() * 9000).toString();
+      const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
       // ============================================================
-      // OTP
-      // ============================================================
-
-      const otp =
-        Math.floor(
-          1000 +
-          Math.random() *
-          9000
-        ).toString();
-
-      const otpExpires =
-        new Date(
-          Date.now() +
-          10 * 60 * 1000
-        );
-
-      // ============================================================
-      // EXISTING UNVERIFIED USER
+      // EXISTING UNVERIFIED USER UPDATE
       // ============================================================
 
       if (existingUser) {
-        existingUser.firstName =
-          firstName.trim();
-
-        existingUser.lastName =
-          lastName.trim();
-
-        existingUser.mobile =
-          normalizedMobile;
-
-        existingUser.email =
-          normalizedEmail;
-
-        existingUser.password =
-          hashedPassword;
-
-        existingUser.role =
-          Number(role);
-
-        existingUser.referredBy =
-          referredBy;
-
-        existingUser.profileImage =
-          profileImage;
-
-        // Registration OTP
-        existingUser.otp =
-          otp;
-
-        existingUser.otpExpires =
-          otpExpires;
-
-        existingUser.otpType =
-          0;
-
-        existingUser.otpVerified =
-          false;
-
-        existingUser.isVerified =
-          false;
-
-        if (location) {
-          existingUser.location =
-            location;
-        }
-
+        existingUser.firstName = firstName.trim();
+        existingUser.lastName = lastName.trim();
+        existingUser.mobile = normalizedMobile;
+        existingUser.email = normalizedEmail;
+        existingUser.password = hashedPassword;
+        existingUser.role = Number(role);
+        existingUser.referredBy = referredBy;
+        existingUser.profileImage = finalProfileImage;
+        existingUser.otp = otp;
+        existingUser.otpExpires = otpExpires;
+        existingUser.otpType = 0;
+        existingUser.otpVerified = false;
+        existingUser.isVerified = false;
+        
+        if (location) existingUser.location = location;
         await existingUser.save();
 
-
-        // ============================================================
-        // CREATE REFERRAL FOR EXISTING UNVERIFIED PROVIDER
-        // ONLY IF REFERRAL DOES NOT ALREADY EXIST
-        // ============================================================
-
-        if (
-          Number(existingUser.role) === 1 &&
-          referredBy
-        ) {
-          const referringUser =
-            await User.findById(referredBy)
-              .select('_id role');
-
-          if (
-            referringUser &&
-            Number(referringUser.role) === 1
-          ) {
-            const existingReferral =
-              await Referral.findOne({
-                referredProvider:
-                  existingUser._id,
-              });
-
+        if (Number(existingUser.role) === 1 && referredBy) {
+          const referringUser = await User.findById(referredBy).select('_id role');
+          if (referringUser && Number(referringUser.role) === 1) {
+            const existingReferral = await Referral.findOne({ referredProvider: existingUser._id });
             if (!existingReferral) {
               await Referral.create({
-                referrer:
-                  referringUser._id,
-
-                referredProvider:
-                  existingUser._id,
-
-                referralCode:
-                  enteredReferralCode
-                    .trim()
-                    .toUpperCase(),
-
-                status:
-                  'PENDING',
-
-                rewardCredits:
-                  0,
+                referrer: referringUser._id,
+                referredProvider: existingUser._id,
+                referralCode: enteredReferralCode.trim().toUpperCase(),
+                status: 'PENDING',
+                rewardCredits: 0,
               });
             }
           }
         }
-        // ==========================================================
-        // SAVE / UPDATE DEVICE
-        // ==========================================================
 
-        await saveUserDevice({
-          userId:
-            existingUser._id,
-          deviceToken,
-          deviceType:
-            normalizedDeviceType,
-        });
-
-        // ==========================================================
-        // SEND OTP
-        // ==========================================================
+        await saveUserDevice({ userId: existingUser._id, deviceToken, deviceType: normalizedDeviceType });
 
         await sendEmail({
-          email:
-            existingUser.email,
-
-          subject:
-            'OTP Verification - Provider App',
-
-          html: `
-          <h2>Hello ${existingUser.firstName},</h2>
-
-          <p>Your new OTP for verification is:</p>
-
-          <h1 style="letter-spacing: 5px;">
-            ${otp}
-          </h1>
-
-          <p>
-            This OTP is valid for 10 minutes.
-          </p>
-        `,
+          email: existingUser.email,
+          subject: 'OTP Verification - Provider App',
+          html: `<h2>Hello ${existingUser.firstName},</h2><p>Your new OTP for verification is:</p><h1 style="letter-spacing: 5px;">${otp}</h1><p>This OTP is valid for 10 minutes.</p>`,
         });
 
-        // ==========================================================
-        // TOKEN
-        // ==========================================================
-
-        const token =
-          generateToken(
-            existingUser
-          );
-
-        // ==========================================================
-        // RESPONSE
-        // ==========================================================
+        const token = generateToken(existingUser);
 
         return res.status(200).json({
           success: true,
-          message:
-            'Registration details updated. New OTP sent to your email.',
+          message: 'Registration details updated. New OTP sent to your email.',
           token,
-
           data: {
-            userId:
-              existingUser._id,
-
-            firstName:
-              existingUser.firstName,
-
-            lastName:
-              existingUser.lastName,
-
-            email:
-              existingUser.email,
-
-            mobile:
-              existingUser.mobile,
-
-            role:
-              existingUser.role,
-
-            referralCode:
-              existingUser.referralCode,
-
-            referredBy:
-              existingUser.referredBy,
-
-            profileImage:
-              existingUser.profileImage,
-
-            location:
-              existingUser.location ||
-              null,
-
-            isVerified:
-              existingUser.isVerified,
+            userId: existingUser._id,
+            firstName: existingUser.firstName,
+            lastName: existingUser.lastName,
+            email: existingUser.email,
+            mobile: existingUser.mobile,
+            role: existingUser.role,
+            referralCode: existingUser.referralCode,
+            referredBy: existingUser.referredBy,
+            profileImage: existingUser.profileImage,
+            location: existingUser.location || null,
+            isVerified: existingUser.isVerified,
           },
         });
       }
@@ -561,246 +267,92 @@ module.exports = {
       // NEW USER
       // ============================================================
 
-      // ============================================================
-      // GENERATE UNIQUE REFERRAL CODE
-      // ============================================================
-
       let userReferralCode;
-
       while (true) {
-        userReferralCode =
-          generateReferralCode();
-
-        const exists =
-          await User.findOne({
-            referralCode:
-              userReferralCode,
-          });
-
+        userReferralCode = generateReferralCode();
+        const exists = await User.findOne({ referralCode: userReferralCode });
         if (!exists) break;
       }
 
-      // ============================================================
-      // CREATE USER DATA
-      // ============================================================
-
       const userData = {
-        firstName:
-          firstName.trim(),
-
-        lastName:
-          lastName.trim(),
-
-        mobile:
-          normalizedMobile,
-
-        email:
-          normalizedEmail,
-
-        password:
-          hashedPassword,
-
-        role:
-          Number(role),
-
-        referralCode:
-          userReferralCode,
-
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        mobile: normalizedMobile,
+        email: normalizedEmail,
+        password: hashedPassword,
+        role: Number(role),
+        referralCode: userReferralCode,
         referredBy,
-
-        profileImage,
-
-        // Registration OTP
+        
+        // Assign the string directly. Initialize the history array for future updates.
+        profileImage: finalProfileImage,
+        profileImageHistory: [], 
+        
         otp,
-
         otpExpires,
-
         otpType: 0,
-
         otpVerified: false,
-
         isVerified: false,
       };
 
-      if (location) {
-        userData.location =
-          location;
-      }
+      if (location) userData.location = location;
 
-      // ============================================================
-      // CREATE USER
-      // ============================================================
+      const user = await User.create(userData);
 
-      const user =
-        await User.create(
-          userData
-        );
-
-      // ============================================================
-      // CREATE REFERRAL RECORD
-      // ============================================================
-
-      // ============================================================
-      // CREATE PROVIDER -> PROVIDER REFERRAL
-      // ============================================================
-
-      if (
-        Number(user.role) === 1 &&
-        referredBy
-      ) {
-        const referringUser =
-          await User.findById(referredBy)
-            .select('_id role');
-
-        // Referral is valid only when
-        // Provider refers another Provider.
-        if (
-          referringUser &&
-          Number(referringUser.role) === 1
-        ) {
+      if (Number(user.role) === 1 && referredBy) {
+        const referringUser = await User.findById(referredBy).select('_id role');
+        if (referringUser && Number(referringUser.role) === 1) {
           await Referral.create({
-            referrer:
-              referringUser._id,
-
-            referredProvider:
-              user._id,
-
-            referralCode:
-              enteredReferralCode
-                .trim()
-                .toUpperCase(),
-
-            status:
-              'PENDING',
-
-            rewardCredits:
-              0,
+            referrer: referringUser._id,
+            referredProvider: user._id,
+            referralCode: enteredReferralCode.trim().toUpperCase(),
+            status: 'PENDING',
+            rewardCredits: 0,
           });
         }
       }
 
-      // ============================================================
-      // SAVE / UPDATE DEVICE
-      // ============================================================
-
-      await saveUserDevice({
-        userId:
-          user._id,
-
-        deviceToken,
-
-        deviceType:
-          normalizedDeviceType,
-      });
-
-      // ============================================================
-      // SEND OTP
-      // ============================================================
+      await saveUserDevice({ userId: user._id, deviceToken, deviceType: normalizedDeviceType });
 
       await sendEmail({
-        email:
-          user.email,
-
-        subject:
-          'OTP Verification - Provider App',
-
-        html: `
-        <h2>Hello ${user.firstName},</h2>
-
-        <p>Your OTP for verification is:</p>
-
-        <h1 style="letter-spacing: 5px;">
-          ${otp}
-        </h1>
-
-        <p>
-          This OTP is valid for 10 minutes.
-        </p>
-      `,
+        email: user.email,
+        subject: 'OTP Verification - Provider App',
+        html: `<h2>Hello ${user.firstName},</h2><p>Your OTP for verification is:</p><h1 style="letter-spacing: 5px;">${otp}</h1><p>This OTP is valid for 10 minutes.</p>`,
       });
 
-      // ============================================================
-      // TOKEN
-      // ============================================================
-
-      const token =
-        generateToken(user);
-
-      // ============================================================
-      // RESPONSE
-      // ============================================================
+      const token = generateToken(user);
 
       return res.status(201).json({
         success: true,
-        message:
-          'Registration successful. OTP sent to your email.',
+        message: 'Registration successful. OTP sent to your email.',
         token,
-
         data: {
-          userId:
-            user._id,
-
-          firstName:
-            user.firstName,
-
-          lastName:
-            user.lastName,
-
-          email:
-            user.email,
-
-          mobile:
-            user.mobile,
-
-          role:
-            user.role,
-
-          referralCode:
-            user.referralCode,
-
-          referredBy:
-            user.referredBy,
-
-          profileImage:
-            user.profileImage,
-
-          location:
-            user.location ||
-            null,
-
-          isVerified:
-            user.isVerified,
+          userId: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          mobile: user.mobile,
+          role: user.role,
+          referralCode: user.referralCode,
+          referredBy: user.referredBy,
+          profileImage: user.profileImage,
+          location: user.location || null,
+          isVerified: user.isVerified,
         },
       });
 
     } catch (error) {
-      console.error(
-        'Register Error:',
-        error
-      );
-
-      // ============================================================
-      // DUPLICATE KEY
-      // ============================================================
-
+      console.error('Register Error:', error);
       if (error.code === 11000) {
         return res.status(400).json({
           success: false,
-          message:
-            'Email or Mobile number already registered',
+          message: 'Email or Mobile number already registered',
         });
       }
-
-      // ============================================================
-      // ERROR
-      // ============================================================
-
       return res.status(500).json({
         success: false,
-        message:
-          'Something went wrong',
-        error:
-          error.message,
+        message: 'Something went wrong',
+        error: error.message,
       });
     }
   },
@@ -1042,7 +594,7 @@ module.exports = {
   },
 
 
-  // ============================================================
+ // ============================================================
   // UPDATE PROFILE
   // ============================================================
   updateProfile: async (req, res) => {
@@ -1061,6 +613,8 @@ module.exports = {
         latitude,
         longitude,
         locationName,
+        // 👇 Accept profileImage as a string 👇
+        profileImage,
       } = req.body;
 
       // ====================== FIND USER ======================
@@ -1122,9 +676,23 @@ module.exports = {
       }
 
       // ====================== PROFILE IMAGE ======================
-      if (req.files && req.files.profileImage) {
-        const uploaded = await uploadSingleFile(req, 'profileImage', 'uploads/profiles');
-        if (uploaded) user.profileImage = uploaded.path;
+      let imageUpdateMessage = '';
+      if (profileImage !== undefined && profileImage.trim() !== '') {
+        if (Number(user.role) === 1) {
+          // Provider: Push to history array for Admin Approval
+          if (!user.profileImageHistory) {
+            user.profileImageHistory = [];
+          }
+          user.profileImageHistory.push({
+            image: profileImage.trim(),
+            status: 0, // 0 = Pending
+            submittedAt: new Date()
+          });
+          imageUpdateMessage = ' Your new profile picture is under review by the admin.';
+        } else {
+          // Customer: Direct update
+          user.profileImage = profileImage.trim();
+        }
       }
 
       // ====================== LOCATION ======================
@@ -1173,7 +741,7 @@ module.exports = {
       // ====================== RESPONSE ======================
       return res.status(200).json({
         success: true,
-        message: 'Profile updated successfully',
+        message: `Profile updated successfully.${imageUpdateMessage}`,
         data: {
           userId: user._id,
           firstName: user.firstName,
@@ -1184,9 +752,13 @@ module.exports = {
           referralCode: user.referralCode,
           referredBy: user.referredBy,
           profileImage: user.profileImage,
+          // Return the latest pending image if the user is a provider
+          latestPendingImage: Number(user.role) === 1 && user.profileImageHistory?.length > 0 
+            ? user.profileImageHistory.slice(-1)[0] 
+            : null,
           location: user.location || null,
           isVerified: user.isVerified,
-          hasWorkDetails // Added here
+          hasWorkDetails
         },
       });
     } catch (error) {
@@ -1194,7 +766,6 @@ module.exports = {
       return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
     }
   },
-
 
   // ============================================================
   // VERIFY OTP
@@ -1861,7 +1432,7 @@ module.exports = {
   // GET LOGGED-IN USER
   // ============================================================
 
-getMe: async (req, res) => {
+  getMe: async (req, res) => {
     try {
       // Added .lean() to allow direct modification of the user object
       const user = await User.findById(req.user.id)
@@ -1878,7 +1449,7 @@ getMe: async (req, res) => {
         const providerProfile = await ProviderProfile.findOne({ user: user._id }).select('_id services').lean();
         hasWorkDetails = !!providerProfile && Array.isArray(providerProfile.services) && providerProfile.services.length > 0;
       }
-      
+
       // Inject flag into response data
       user.hasWorkDetails = hasWorkDetails;
 
@@ -2311,8 +1882,51 @@ getMe: async (req, res) => {
       console.error('Delete Account Error:', error);
       return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
     }
-  }
+  },
 
+testOtp: async (req, res) => {
+    try {
+        const mobile = "8219891913";
+        const otp = "9898";
+        await sendSms(mobile  , otp);
 
+        const response = await axios.post(
+            "https://control.msg91.com/api/v5/flow",
+            {
+                flow_id: "6a9867549bffba00f082a12",
+                sender: "smsind",
+                recipients: [
+                    {
+                        mobiles: `91${mobile}`,
+                        OTP: otp
+                    }
+                ]
+            },
+            {
+                headers: {
+                    authkey: MSG91_AUTH_KEY,
+                    "Content-Type": "application/json"
+                }
+            }
+        );
 
+        console.log("MSG91 Response:", response.data);
+
+        return res.status(200).json({
+            success: true,
+            msg91: response.data
+        });
+
+    } catch (error) {
+        console.log(
+            "MSG91 ERROR:",
+            error.response?.data || error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            error: error.response?.data || error.message
+        });
+    }
+}
 };
