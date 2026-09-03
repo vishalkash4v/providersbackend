@@ -954,10 +954,7 @@ module.exports = {
             return res.status(500).json({ success: false, message: 'Error', error: error.message });
         }
     },
-    // ============================================================
-    // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
-    // ============================================================
- // ============================================================
+// ============================================================
     // UNIFIED: GET MY BOOKINGS (USER & PROVIDER)
     // ============================================================
     getMyBookings: async (req, res) => {
@@ -1063,7 +1060,7 @@ module.exports = {
                 .sort({ createdAt: -1 })
                 .lean();
 
-            // Fetch Provider Locations Only For Type 2 (Works for both User & Provider)
+            // Fetch Provider Locations Only For Type 2
             let providerLocationMap = {};
             if (type === '2' && bookings.length > 0) {
                 const assignedProviderIds = [...new Set(bookings.map(b => b.provider?._id?.toString()).filter(Boolean))];
@@ -1080,17 +1077,14 @@ module.exports = {
             // ========================================================
             if (role === 0) {
                 // --- CUSTOMER SIDE ---
-
                 const bookingIdsForUser = bookings.map(b => b._id);
                 const userActiveOffers = await BookingOffer.find({
                     booking: { $in: bookingIdsForUser },
-                    status: { $in: [1, 3] } // 1 = User Accepted (Type 1), 3 = Provider Approved (Type 2)
+                    status: { $in: [1, 3] } 
                 }).lean();
 
                 bookings = bookings.map(booking => {
                     const finalOffer = userActiveOffers.find(o => o.booking.toString() === booking._id.toString());
-
-                    // Default to offer's distance if available
                     let calculatedDistance = finalOffer ? finalOffer.distanceKm : null;
 
                     if (type === '2' && booking.provider && booking.provider._id) {
@@ -1118,19 +1112,12 @@ module.exports = {
                     return booking;
                 });
 
-                // 👇 NAYA CODE: CUSTOM SORTING FOR CUSTOMER (TYPE 0) 👇
                 if (type === '0') {
                     bookings.sort((a, b) => {
-                        // 1. Jinke pass naye offers hain (newStatus: 1) wo upar aayenge
-                        if (b.newStatus !== a.newStatus) {
-                            return b.newStatus - a.newStatus;
-                        }
-                        // 2. Baaki sab createdAt ke hisaab se descending order mein (newest first)
+                        if (b.newStatus !== a.newStatus) return b.newStatus - a.newStatus;
                         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
                     });
                 }
-                // 👆 ================================================ 👆
-
             } else if (role === 1) {
                 // --- PROVIDER SIDE ---
                 bookings = bookings.map(booking => {
@@ -1170,11 +1157,39 @@ module.exports = {
                 });
             }
 
+            // ========================================================
+            // 4. KYC VERIFICATION STATUS (ONLY FOR TYPE 0)
+            // ========================================================
+            let kycVerification = undefined; // Undefined means it won't show up in type 1 or 2
+
+            if (type === '0') {
+                if (role === 0) {
+                    // USER: Send nulls
+                    kycVerification = {
+                        status: null,
+                        rejectionReason: null,
+                        isVerified: false
+                    };
+                } else if (role === 1) {
+                    // PROVIDER: Fetch from KYC collection
+                    const kycData = await Kyc.findOne({ user: userId }).select('status rejectionReason').lean();
+                    kycVerification = {
+                        status: kycData ? kycData.status : 0, // 0: Not Submitted, 1: Submitted, 2: Approved, 3: Rejected
+                        rejectionReason: kycData?.rejectionReason || null,
+                        isVerified: kycData?.status === 2
+                    };
+                }
+            }
+
+            // ========================================================
+            // 5. SEND RESPONSE
+            // ========================================================
             return res.status(200).json({
                 success: true,
                 message: 'Bookings fetched successfully',
                 type: type || 'all',
                 count: bookings.length,
+                kycVerification, // 👇 Appended right alongside count & data
                 data: bookings,
             });
         } catch (error) {
