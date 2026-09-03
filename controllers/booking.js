@@ -11,6 +11,7 @@ const { validate } = require('../utils/fieldValidations');
 const { calculateDistance } = require('../utils/distance');
 const { notifyUser } = require('../utils/notification');
 const { useBookingCredit, addBookingCredits } = require('../utils/bookingCredits');
+const Kyc = require('../models/Kyc');
 
 
 // ============================================================
