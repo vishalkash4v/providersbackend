@@ -6,6 +6,7 @@ const BookingOffer = require('../models/BookingOffer');
 const Referral = require('../models/Referral');
 const { validate } = require('../utils/fieldValidations');
 const { calculateDistance } = require('../utils/distance');
+const Kyc = require('../models/Kyc');
 module.exports = {
 
 
@@ -135,12 +136,24 @@ module.exports = {
             newJobs = newJobs.map(job => injectOfferData(job, '0'));
             acceptedOffers = acceptedOffers.map(job => injectOfferData(job, '1'));
 
+            // 👇 ======================================================== 👇
+            // FETCH KYC STATUS
+            // ========================================================
+            const kycData = await Kyc.findOne({ user: userId }).select('status rejectionReason').lean();
+            const kycVerification = {
+                status: kycData ? kycData.status : 0, // 0: Not Submitted, 1: Submitted, 2: Approved, 3: Rejected
+                rejectionReason: kycData?.rejectionReason || null,
+                isVerified: kycData?.status === 2
+            };
+            // 👆 ======================================================== 👆
+
             // ========================================================
             // FINAL RESPONSE
             // ========================================================
             return res.status(200).json({
                 success: true,
                 message: 'Provider home dashboard fetched successfully',
+                kycVerification, // 👉 Injected at the root level
                 data: {
                     stats: {
                         totalCount: totalCount,          // Total earned (First Free + Referrals)
