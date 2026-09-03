@@ -12,6 +12,7 @@ const Policy = require('../models/Policy');
 const { generateToken } = require('../middleware/jwt');
 const { validate } = require('../utils/fieldValidations');
 const { uploadSingleFile } = require('../utils/r2uploads');
+const { notifyUser } = require('../utils/notification');
 
 module.exports = {
 
@@ -51,7 +52,7 @@ module.exports = {
         } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
     },
 
-  // ============================================================
+    // ============================================================
     // 1. DASHBOARD STATS & GRAPHS
     // ============================================================
     getDashboardStats: async (req, res) => {
@@ -60,13 +61,13 @@ module.exports = {
             const totalUsers = await User.countDocuments({ role: 0 });
             const totalProviders = await User.countDocuments({ role: 1 });
             const totalBookings = await Booking.countDocuments({ deletedAt: null });
-            
+
             const payments = await BookingPayment.find({ status: 'PAID' }).lean();
             const totalEarnings = payments.reduce((sum, pay) => sum + (Number(pay.amount) || 0), 0);
 
             // --- 2. Graph Data (Analytics) ---
             const now = new Date();
-            
+
             // Graph A: Last 7 Days Bookings (Daily Trend)
             const sevenDaysAgo = new Date();
             sevenDaysAgo.setDate(now.getDate() - 7);
@@ -95,24 +96,24 @@ module.exports = {
                 { $sort: { _id: 1 } }
             ]);
 
-            return res.status(200).json({ 
-                success: true, 
+            return res.status(200).json({
+                success: true,
                 message: 'Dashboard stats and graphs fetched',
-                data: { 
+                data: {
                     counts: {
-                        totalUsers, 
-                        totalProviders, 
-                        totalBookings, 
+                        totalUsers,
+                        totalProviders,
+                        totalBookings,
                         totalEarnings: Number(totalEarnings.toFixed(2))
                     },
                     graphs: {
                         dailyBookings,   // Frontend pe Bar/Line chart (Last 7 days) ke liye
                         monthlyBookings  // Frontend pe Bar/Line chart (This Year) ke liye
                     }
-                } 
+                }
             });
-        } catch (error) { 
-            return res.status(500).json({ success: false, message: error.message }); 
+        } catch (error) {
+            return res.status(500).json({ success: false, message: error.message });
         }
     },
 
@@ -166,7 +167,7 @@ module.exports = {
         try {
             const providers = await User.find({ role: 1 }).sort({ createdAt: -1 }).select('-password');
             const profiles = await ProviderProfile.find().populate('services', 'name').lean();
-            
+
             const data = providers.map(provider => {
                 const profile = profiles.find(p => p.user.toString() === provider._id.toString());
                 return { ...provider.toObject(), profile: profile || null };
@@ -180,7 +181,7 @@ module.exports = {
             const provider = await User.findById(req.params.id).select('-password').lean();
             if (!provider) return res.status(404).json({ success: false, message: 'Provider not found' });
             const profile = await ProviderProfile.findOne({ user: req.params.id }).populate('services', 'name').lean();
-            
+
             return res.status(200).json({ success: true, data: { ...provider, profile } });
         } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
     },
@@ -407,10 +408,10 @@ module.exports = {
             });
         } catch (error) {
             console.error('Get Support Tickets Error:', error);
-            return res.status(500).json({ 
-                success: false, 
-                message: 'Something went wrong', 
-                error: error.message 
+            return res.status(500).json({
+                success: false,
+                message: 'Something went wrong',
+                error: error.message
             });
         }
     },
@@ -457,4 +458,162 @@ module.exports = {
             return res.status(500).json({ success: false, error: error.message });
         }
     },
+
+    // ============================================================
+    // FETCH PENDING PROFILE IMAGES (ADMIN)
+    // ============================================================
+    getPendingProfileImages: async (req, res) => {
+        try {
+            console.log('Fetching pending profile images for admin...');
+            if (Number(req.user.role) !== 2) {
+              return res.status(403).json({ success: false, message: 'Unauthorized access' });
+            }
+
+            
+
+            const page = parseInt(req.query.page) || 1;
+            const limit = parseInt(req.query.limit) || 20;
+            const skip = (page - 1) * limit;
+
+            // ====================== FIND USERS WITH PENDING IMAGES ======================
+            const query = { 'profileImageHistory.status': 0 };
+
+            const users = await User.find(query)
+                .select('firstName lastName email mobile profileImage profileImageHistory')
+                .sort({ updatedAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean();
+
+            const total = await User.countDocuments(query);
+
+            // ====================== FORMAT RESPONSE DATA ======================
+            const pendingApprovals = users.map(user => {
+                // Sirf wahi images filter karo jo pending (status: 0) hain
+                const pendingImages = user.profileImageHistory.filter(img => img.status === 0);
+
+                return {
+                    userId: user._id,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    email: user.email,
+                    mobile: user.mobile,
+                    currentProfileImage: user.profileImage, // Jo image abhi live hai
+                    pendingImages: pendingImages // Array of new images waiting for approval
+                };
+            });
+
+            // ====================== RESPONSE ======================
+            return res.status(200).json({
+                success: true,
+                message: 'Pending profile images fetched successfully',
+                count: pendingApprovals.length,
+                total,
+                page,
+                totalPages: Math.ceil(total / limit),
+                data: pendingApprovals,
+            });
+
+        } catch (error) {
+            console.log('Get Pending Profile Images Error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Something went wrong',
+                error: error.message
+            });
+        }
+    },
+
+    // ============================================================
+    // REVIEW PROVIDER PROFILE IMAGE (ADMIN)
+    // ============================================================
+    reviewProviderImage: async (req, res) => {
+        try {
+            // Optional: Admin Role Check
+            // if (Number(req.user.role) !== 2) {
+            //   return res.status(403).json({ success: false, message: 'Unauthorized access' });
+            // }
+
+            const { providerId, imageId, status, rejectionReason } = req.body;
+
+            // status: 1 = Approve, 0 = Reject
+            if (![0,1].includes(Number(status))) {
+                return res.status(400).json({ success: false, message: 'Invalid status. Use 1 to approve, 0 to reject.' });
+            }
+
+            // ====================== FIND PROVIDER ======================
+            const provider = await User.findById(providerId);
+
+            if (!provider) {
+                return res.status(404).json({ success: false, message: 'Provider not found' });
+            }
+
+            // ====================== FIND SPECIFIC IMAGE IN HISTORY ======================
+            // 'id()' Mongoose subdocuments par kaam karta hai
+            const imageToReview = provider.profileImageHistory.id(imageId);
+
+            if (!imageToReview || imageToReview.status !== 0) {
+                return res.status(404).json({ success: false, message: 'Pending image not found or already reviewed' });
+            }
+
+            // ====================== APPROVE LOGIC ======================
+            if (Number(status) === 1) {
+                imageToReview.status = 1;
+                imageToReview.reviewedAt = new Date();
+
+                // Make this image the main live profile image
+                provider.profileImage = imageToReview.image;
+                await provider.save();
+
+                // Send Success Notification
+                try {
+                    await notifyUser({
+                        userId: provider._id,
+                        type: 'IMAGE_APPROVED',
+                        title: 'Profile Picture Approved ✅',
+                        message: 'Your new profile picture has been approved and is now live.',
+                    });
+                } catch (notifyErr) {
+                    console.error('Notification Error (Approve):', notifyErr.message);
+                }
+
+                return res.status(200).json({ success: true, message: 'Image approved successfully' });
+            }
+
+            // ====================== REJECT LOGIC ======================
+            else if (Number(status) === 0) {
+                if (!rejectionReason || rejectionReason.trim() === '') {
+                    return res.status(400).json({ success: false, message: 'Rejection reason is required' });
+                }
+
+                imageToReview.status = 0; // Explicitly mark as rejected        
+                imageToReview.rejectionReason = rejectionReason.trim();
+                imageToReview.reviewedAt = new Date();
+
+                await provider.save();
+
+                // Send Rejection Notification
+                try {
+                    await notifyUser({
+                        userId: provider._id,
+                        type: 'IMAGE_REJECTED',
+                        title: 'Profile Picture Rejected ❌',
+                        message: `Your new profile picture was rejected. Reason: ${rejectionReason.trim()}`,
+                    });
+                } catch (notifyErr) {
+                    console.error('Notification Error (Reject):', notifyErr.message);
+                }
+
+                return res.status(200).json({ success: true, message: 'Image rejected successfully' });
+            }
+
+        } catch (error) {
+            console.error('Review Provider Image Error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Something went wrong',
+                error: error.message
+            });
+        }
+    }
 };

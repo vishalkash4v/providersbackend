@@ -594,7 +594,7 @@ module.exports = {
   },
 
 
- // ============================================================
+// ============================================================
   // UPDATE PROFILE
   // ============================================================
   updateProfile: async (req, res) => {
@@ -613,8 +613,7 @@ module.exports = {
         latitude,
         longitude,
         locationName,
-        // 👇 Accept profileImage as a string 👇
-        profileImage,
+        profileImage, // Accepts string (URL/Base64)
       } = req.body;
 
       // ====================== FIND USER ======================
@@ -678,20 +677,28 @@ module.exports = {
       // ====================== PROFILE IMAGE ======================
       let imageUpdateMessage = '';
       if (profileImage !== undefined && profileImage.trim() !== '') {
+        // Ensure history array exists
+        if (!user.profileImageHistory) {
+          user.profileImageHistory = [];
+        }
+
         if (Number(user.role) === 1) {
-          // Provider: Push to history array for Admin Approval
-          if (!user.profileImageHistory) {
-            user.profileImageHistory = [];
-          }
+          // Provider: Push to history array as Pending (0) for Admin Approval
           user.profileImageHistory.push({
             image: profileImage.trim(),
-            status: 0, // 0 = Pending
+            status: 0,
             submittedAt: new Date()
           });
           imageUpdateMessage = ' Your new profile picture is under review by the admin.';
         } else {
-          // Customer: Direct update
+          // Customer: Direct update AND save to history as Auto-Approved (1)
           user.profileImage = profileImage.trim();
+          user.profileImageHistory.push({
+            image: profileImage.trim(),
+            status: 1, 
+            submittedAt: new Date(),
+            reviewedAt: new Date() // Auto-reviewed at submission
+          });
         }
       }
 

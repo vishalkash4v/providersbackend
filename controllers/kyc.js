@@ -45,7 +45,7 @@ module.exports = {
             return res.status(200).json({ 
                 success: true, 
                 message: 'KYC documents submitted successfully. Please wait for admin approval.',
-                data: kyc 
+               
             });
 
         } catch (error) {

@@ -49,5 +49,15 @@ router.get('/support', isAdmin, adminController.getSupportTickets);
 router.post('/policy', isAdmin, adminController.upsertPolicy); // Handles both Create & Update
 router.get('/policy', isAdmin, adminController.getPolicies);
 router.delete('/policy/:id', isAdmin, adminController.deletePolicy);
+// ============================================================
+// ADMIN: PROFILE IMAGE APPROVAL ROUTES
+// ============================================================
 
+// 1. Fetch all users/providers with pending profile images
+// Endpoint: GET /api/admin/pending-images
+router.get('/pending-images', isAdmin, adminController.getPendingProfileImages);
+
+// 2. Approve or Reject a specific pending image
+// Endpoint: PUT /api/admin/review-image
+router.put('/review-image', isAdmin, adminController.reviewProviderImage);
 module.exports = router;
