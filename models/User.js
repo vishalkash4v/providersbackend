@@ -87,6 +87,11 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
 
+    countryCode: {
+      type: String,
+      default: '+91'
+    },
+
     mobile: {
       type: String,
       required: true,

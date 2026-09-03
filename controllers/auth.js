@@ -10,13 +10,14 @@ const { addBookingCredits } = require('../utils/bookingCredits');
 const sendEmail = require('../utils/sendEmail');
 const ProviderProfile = require('../models/ProviderProfile');
 const Policy = require('../models/Policy');
+const Kyc = require('../models/Kyc');
 const {
   validate,
 } = require('../utils/fieldValidations');
-  const axios = require("axios");
+const axios = require("axios");
 
-      const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
-      const sendSms = require('../utils/sendSms');
+const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
+const sendSms = require('../utils/sendSms');
 
 const {
   generateReferralCode,
@@ -32,16 +33,11 @@ const Support = require('../models/Support');
 
 module.exports = {
 
+// ============================================================
+  // REGISTER API
   // ============================================================
-  // REGISTER
-  // ============================================================
-
- register: async (req, res) => {
+  register: async (req, res) => {
     try {
-      // ============================================================
-      // REQUIRED FIELDS
-      // ============================================================
-
       const required = [
         'firstName',
         'lastName',
@@ -52,10 +48,6 @@ module.exports = {
       ];
 
       if (validate(req, res, required)) return;
-
-      // ============================================================
-      // REQUEST DATA
-      // ============================================================
 
       const {
         firstName,
@@ -68,43 +60,23 @@ module.exports = {
         longitude,
         locationName,
         referralCode: enteredReferralCode,
-        
-        // 👇 ACCEPTING IMAGE AS A DIRECT STRING (Base64 or URL) 👇
-        profileImage, 
-
-        // ==========================================================
-        // OPTIONAL DEVICE FIELDS
-        // ==========================================================
-
+        profileImage,
+        countryCode, // <--- Extracted
         deviceToken,
         deviceType = 0,
       } = req.body;
 
-      // ============================================================
-      // NORMALIZE EMAIL / MOBILE
-      // ============================================================
-
       const normalizedEmail = email.trim().toLowerCase();
       const normalizedMobile = mobile.trim();
+      const normalizedCountryCode = countryCode ? countryCode.trim() : '+91'; // Fallback to default
       const normalizedDeviceType = Number(deviceType);
 
       if (![0, 1].includes(normalizedDeviceType)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid device type. Use 0 for Android or 1 for iOS',
-        });
+        return res.status(400).json({ success: false, message: 'Invalid device type. Use 0 for Android or 1 for iOS' });
       }
-
-      // ============================================================
-      // FIND EXISTING USERS
-      // ============================================================
 
       const existingEmailUser = await User.findOne({ email: normalizedEmail });
       const existingMobileUser = await User.findOne({ mobile: normalizedMobile });
-
-      // ============================================================
-      // VERIFIED VALIDATIONS
-      // ============================================================
 
       if (existingEmailUser && existingEmailUser.isVerified) {
         return res.status(400).json({ success: false, message: 'Email already registered' });
@@ -119,40 +91,23 @@ module.exports = {
         existingMobileUser &&
         existingEmailUser._id.toString() !== existingMobileUser._id.toString()
       ) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email and Mobile number are associated with different accounts',
-        });
+        return res.status(400).json({ success: false, message: 'Email and Mobile number are associated with different accounts' });
       }
 
       const existingUser = existingEmailUser || existingMobileUser;
-
-      // ============================================================
-      // REFERRAL
-      // ============================================================
 
       let referredBy = existingUser?.referredBy || null;
 
       if (enteredReferralCode && enteredReferralCode.trim() !== '') {
         const normalizedReferralCode = enteredReferralCode.trim().toUpperCase();
-        const referringUser = await User.findOne({
-          referralCode: normalizedReferralCode,
-          isActive: true,
-        });
+        const referringUser = await User.findOne({ referralCode: normalizedReferralCode, isActive: true });
 
-        if (!referringUser) {
-          return res.status(400).json({ success: false, message: 'Invalid referral code' });
-        }
-
+        if (!referringUser) return res.status(400).json({ success: false, message: 'Invalid referral code' });
         if (existingUser && referringUser._id.toString() === existingUser._id.toString()) {
           return res.status(400).json({ success: false, message: 'You cannot use your own referral code' });
         }
         referredBy = referringUser._id;
       }
-
-      // ============================================================
-      // LOCATION
-      // ============================================================
 
       let location = existingUser?.location || null;
       const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
@@ -167,30 +122,15 @@ module.exports = {
         const lat = Number(latitude);
         const lng = Number(longitude);
 
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-          return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
-        }
-        if (lat < -90 || lat > 90) {
-          return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
-        }
-        if (lng < -180 || lng > 180) {
-          return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
-        }
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
+        if (lat < -90 || lat > 90) return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
+        if (lng < -180 || lng > 180) return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
 
         location = { type: 'Point', coordinates: [lng, lat] };
         if (hasLocationName) location.name = locationName.trim();
       }
 
-      // ============================================================
-      // PROFILE IMAGE LOGIC (MULTIPART REMOVED)
-      // ============================================================
-      
       const finalProfileImage = profileImage || existingUser?.profileImage || '';
-
-      // ============================================================
-      // PASSWORD & OTP
-      // ============================================================
-
       const hashedPassword = await bcrypt.hash(password, 12);
       const otp = Math.floor(1000 + Math.random() * 9000).toString();
       const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
@@ -198,11 +138,11 @@ module.exports = {
       // ============================================================
       // EXISTING UNVERIFIED USER UPDATE
       // ============================================================
-
       if (existingUser) {
         existingUser.firstName = firstName.trim();
         existingUser.lastName = lastName.trim();
         existingUser.mobile = normalizedMobile;
+        existingUser.countryCode = normalizedCountryCode; // <--- Saved
         existingUser.email = normalizedEmail;
         existingUser.password = hashedPassword;
         existingUser.role = Number(role);
@@ -213,7 +153,7 @@ module.exports = {
         existingUser.otpType = 0;
         existingUser.otpVerified = false;
         existingUser.isVerified = false;
-        
+
         if (location) existingUser.location = location;
         await existingUser.save();
 
@@ -252,6 +192,7 @@ module.exports = {
             firstName: existingUser.firstName,
             lastName: existingUser.lastName,
             email: existingUser.email,
+            countryCode: existingUser.countryCode, // <--- Returned
             mobile: existingUser.mobile,
             role: existingUser.role,
             referralCode: existingUser.referralCode,
@@ -266,7 +207,6 @@ module.exports = {
       // ============================================================
       // NEW USER
       // ============================================================
-
       let userReferralCode;
       while (true) {
         userReferralCode = generateReferralCode();
@@ -278,16 +218,14 @@ module.exports = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         mobile: normalizedMobile,
+        countryCode: normalizedCountryCode, // <--- Saved
         email: normalizedEmail,
         password: hashedPassword,
         role: Number(role),
         referralCode: userReferralCode,
         referredBy,
-        
-        // Assign the string directly. Initialize the history array for future updates.
         profileImage: finalProfileImage,
-        profileImageHistory: [], 
-        
+        profileImageHistory: [],
         otp,
         otpExpires,
         otpType: 0,
@@ -296,7 +234,6 @@ module.exports = {
       };
 
       if (location) userData.location = location;
-
       const user = await User.create(userData);
 
       if (Number(user.role) === 1 && referredBy) {
@@ -331,6 +268,7 @@ module.exports = {
           firstName: user.firstName,
           lastName: user.lastName,
           email: user.email,
+          countryCode: user.countryCode, // <--- Returned
           mobile: user.mobile,
           role: user.role,
           referralCode: user.referralCode,
@@ -344,19 +282,153 @@ module.exports = {
     } catch (error) {
       console.error('Register Error:', error);
       if (error.code === 11000) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email or Mobile number already registered',
-        });
+        return res.status(400).json({ success: false, message: 'Email or Mobile number already registered' });
       }
-      return res.status(500).json({
-        success: false,
-        message: 'Something went wrong',
-        error: error.message,
-      });
+      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
     }
   },
 
+  // ============================================================
+  // UPDATE PROFILE API
+  // ============================================================
+  updateProfile: async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      if (!userId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+
+      const {
+        firstName,
+        lastName,
+        mobile,
+        countryCode, // <--- Extracted
+        email,
+        latitude,
+        longitude,
+        locationName,
+        profileImage,
+      } = req.body;
+
+      const user = await User.findById(userId);
+
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      if (email !== undefined) {
+        if (!email || !email.trim()) return res.status(400).json({ success: false, message: 'Email is required' });
+        const normalizedEmail = email.trim().toLowerCase();
+        const existingEmail = await User.findOne({ email: normalizedEmail, _id: { $ne: userId } });
+        if (existingEmail) return res.status(400).json({ success: false, message: 'Email already registered' });
+        user.email = normalizedEmail;
+      }
+
+      if (mobile !== undefined) {
+        const normalizedMobile = mobile.trim();
+        if (!/^[0-9]{10}$/.test(normalizedMobile)) return res.status(400).json({ success: false, message: 'Please enter a valid 10 digit mobile number' });
+        const existingMobile = await User.findOne({ mobile: normalizedMobile, _id: { $ne: userId } });
+        if (existingMobile) return res.status(400).json({ success: false, message: 'Mobile number already registered' });
+        user.mobile = normalizedMobile;
+      }
+
+      if (countryCode !== undefined) {
+        user.countryCode = countryCode.trim(); // <--- Saved
+      }
+
+      if (firstName !== undefined) {
+        if (!firstName.trim()) return res.status(400).json({ success: false, message: 'First name is required' });
+        user.firstName = firstName.trim();
+      }
+
+      if (lastName !== undefined) {
+        if (!lastName.trim()) return res.status(400).json({ success: false, message: 'Last name is required' });
+        user.lastName = lastName.trim();
+      }
+
+      let imageUpdateMessage = '';
+      if (profileImage !== undefined && profileImage.trim() !== '') {
+        if (!user.profileImageHistory) user.profileImageHistory = [];
+
+        if (Number(user.role) === 1) {
+          user.profileImageHistory.push({
+            image: profileImage.trim(),
+            status: 0,
+            submittedAt: new Date()
+          });
+          imageUpdateMessage = ' Your new profile picture is under review by the admin.';
+        } else {
+          user.profileImage = profileImage.trim();
+          user.profileImageHistory.push({
+            image: profileImage.trim(),
+            status: 1,
+            submittedAt: new Date(),
+            reviewedAt: new Date()
+          });
+        }
+      }
+
+      const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
+      const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
+      const hasLocationName = locationName && locationName.trim() !== '';
+
+      if (hasLatitude || hasLongitude || hasLocationName) {
+        const existingLocation = user.location;
+        let lat = existingLocation?.coordinates?.[1];
+        let lng = existingLocation?.coordinates?.[0];
+
+        if (hasLatitude) lat = Number(latitude);
+        if (hasLongitude) lng = Number(longitude);
+
+        if (lat === undefined || lat === null || lng === undefined || lng === null) return res.status(400).json({ success: false, message: 'Both latitude and longitude are required when providing location' });
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
+        if (lat < -90 || lat > 90) return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
+        if (lng < -180 || lng > 180) return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
+
+        user.location = { type: 'Point', coordinates: [lng, lat] };
+        if (hasLocationName) {
+          user.location.name = locationName.trim();
+        } else if (existingLocation?.name) {
+          user.location.name = existingLocation.name;
+        }
+      }
+
+      await user.save();
+
+      let hasWorkDetails = false;
+      if (Number(user.role) === 1) {
+        const providerProfile = await ProviderProfile.findOne({ user: user._id }).select('_id services').lean();
+        hasWorkDetails = !!providerProfile && Array.isArray(providerProfile.services) && providerProfile.services.length > 0;
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Profile updated successfully.${imageUpdateMessage}`,
+        data: {
+          userId: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          countryCode: user.countryCode, // <--- Returned
+          mobile: user.mobile,
+          role: user.role,
+          referralCode: user.referralCode,
+          referredBy: user.referredBy,
+          profileImage: user.profileImage,
+          latestPendingImage: Number(user.role) === 1 && user.profileImageHistory?.length > 0
+            ? user.profileImageHistory.slice(-1)[0]
+            : null,
+          location: user.location || null,
+          isVerified: user.isVerified,
+          hasWorkDetails
+        },
+      });
+    } catch (error) {
+      console.error('Update Profile Error:', error);
+      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
+    }
+  },
   // ============================================================
   // ============================================================
   // LOGIN
@@ -594,186 +666,7 @@ module.exports = {
   },
 
 
-// ============================================================
-  // UPDATE PROFILE
-  // ============================================================
-  updateProfile: async (req, res) => {
-    try {
-      const userId = req.user.id;
-
-      if (!userId) {
-        return res.status(401).json({ success: false, message: 'Unauthorized' });
-      }
-
-      const {
-        firstName,
-        lastName,
-        mobile,
-        email,
-        latitude,
-        longitude,
-        locationName,
-        profileImage, // Accepts string (URL/Base64)
-      } = req.body;
-
-      // ====================== FIND USER ======================
-      const user = await User.findById(userId);
-
-      if (!user) {
-        return res.status(404).json({ success: false, message: 'User not found' });
-      }
-
-      // ====================== EMAIL ======================
-      if (email !== undefined) {
-        if (!email || !email.trim()) {
-          return res.status(400).json({ success: false, message: 'Email is required' });
-        }
-
-        const normalizedEmail = email.trim().toLowerCase();
-        const existingEmail = await User.findOne({
-          email: normalizedEmail,
-          _id: { $ne: userId },
-        });
-
-        if (existingEmail) {
-          return res.status(400).json({ success: false, message: 'Email already registered' });
-        }
-
-        user.email = normalizedEmail;
-      }
-
-      // ====================== MOBILE ======================
-      if (mobile !== undefined) {
-        const normalizedMobile = mobile.trim();
-
-        if (!/^[0-9]{10}$/.test(normalizedMobile)) {
-          return res.status(400).json({ success: false, message: 'Please enter a valid 10 digit mobile number' });
-        }
-
-        const existingMobile = await User.findOne({
-          mobile: normalizedMobile,
-          _id: { $ne: userId },
-        });
-
-        if (existingMobile) {
-          return res.status(400).json({ success: false, message: 'Mobile number already registered' });
-        }
-
-        user.mobile = normalizedMobile;
-      }
-
-      // ====================== FIRST NAME ======================
-      if (firstName !== undefined) {
-        if (!firstName.trim()) return res.status(400).json({ success: false, message: 'First name is required' });
-        user.firstName = firstName.trim();
-      }
-
-      // ====================== LAST NAME ======================
-      if (lastName !== undefined) {
-        if (!lastName.trim()) return res.status(400).json({ success: false, message: 'Last name is required' });
-        user.lastName = lastName.trim();
-      }
-
-      // ====================== PROFILE IMAGE ======================
-      let imageUpdateMessage = '';
-      if (profileImage !== undefined && profileImage.trim() !== '') {
-        // Ensure history array exists
-        if (!user.profileImageHistory) {
-          user.profileImageHistory = [];
-        }
-
-        if (Number(user.role) === 1) {
-          // Provider: Push to history array as Pending (0) for Admin Approval
-          user.profileImageHistory.push({
-            image: profileImage.trim(),
-            status: 0,
-            submittedAt: new Date()
-          });
-          imageUpdateMessage = ' Your new profile picture is under review by the admin.';
-        } else {
-          // Customer: Direct update AND save to history as Auto-Approved (1)
-          user.profileImage = profileImage.trim();
-          user.profileImageHistory.push({
-            image: profileImage.trim(),
-            status: 1, 
-            submittedAt: new Date(),
-            reviewedAt: new Date() // Auto-reviewed at submission
-          });
-        }
-      }
-
-      // ====================== LOCATION ======================
-      const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
-      const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
-      const hasLocationName = locationName && locationName.trim() !== '';
-
-      if (hasLatitude || hasLongitude || hasLocationName) {
-        const existingLocation = user.location;
-        let lat = existingLocation?.coordinates?.[1];
-        let lng = existingLocation?.coordinates?.[0];
-
-        if (hasLatitude) lat = Number(latitude);
-        if (hasLongitude) lng = Number(longitude);
-
-        if (lat === undefined || lat === null || lng === undefined || lng === null) {
-          return res.status(400).json({ success: false, message: 'Both latitude and longitude are required when providing location' });
-        }
-
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-          return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
-        }
-
-        if (lat < -90 || lat > 90) return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
-        if (lng < -180 || lng > 180) return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
-
-        user.location = { type: 'Point', coordinates: [lng, lat] };
-
-        if (hasLocationName) {
-          user.location.name = locationName.trim();
-        } else if (existingLocation?.name) {
-          user.location.name = existingLocation.name;
-        }
-      }
-
-      // ====================== SAVE ======================
-      await user.save();
-
-      // ====================== HAS WORK DETAILS CHECK ======================
-      let hasWorkDetails = false;
-      if (Number(user.role) === 1) {
-        const providerProfile = await ProviderProfile.findOne({ user: user._id }).select('_id services').lean();
-        hasWorkDetails = !!providerProfile && Array.isArray(providerProfile.services) && providerProfile.services.length > 0;
-      }
-
-      // ====================== RESPONSE ======================
-      return res.status(200).json({
-        success: true,
-        message: `Profile updated successfully.${imageUpdateMessage}`,
-        data: {
-          userId: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          mobile: user.mobile,
-          role: user.role,
-          referralCode: user.referralCode,
-          referredBy: user.referredBy,
-          profileImage: user.profileImage,
-          // Return the latest pending image if the user is a provider
-          latestPendingImage: Number(user.role) === 1 && user.profileImageHistory?.length > 0 
-            ? user.profileImageHistory.slice(-1)[0] 
-            : null,
-          location: user.location || null,
-          isVerified: user.isVerified,
-          hasWorkDetails
-        },
-      });
-    } catch (error) {
-      console.error('Update Profile Error:', error);
-      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
-    }
-  },
-
+ 
   // ============================================================
   // VERIFY OTP
   // type: 0 = Registration
@@ -1438,7 +1331,6 @@ module.exports = {
   // ============================================================
   // GET LOGGED-IN USER
   // ============================================================
-
   getMe: async (req, res) => {
     try {
       // Added .lean() to allow direct modification of the user object
@@ -1456,10 +1348,45 @@ module.exports = {
         const providerProfile = await ProviderProfile.findOne({ user: user._id }).select('_id services').lean();
         hasWorkDetails = !!providerProfile && Array.isArray(providerProfile.services) && providerProfile.services.length > 0;
       }
-
-      // Inject flag into response data
       user.hasWorkDetails = hasWorkDetails;
 
+      // ====================== 1. KYC VERIFICATION STATUS ======================
+      // Find the most recent KYC record for this user
+      const kycRecord = await Kyc.findOne({ user: user._id }).sort({ createdAt: -1 }).lean();
+
+      user.kycVerification = {
+        // Status keys: 0 = Not Submitted, 1 = Submitted(Pending), 2 = Approved, 3 = Rejected
+        status: kycRecord ? kycRecord.status : 0,
+        rejectionReason: kycRecord?.rejectionReason || null,
+        documentType: kycRecord?.documentType || null
+      };
+
+      // ====================== 2. IMAGE VERIFICATION STATUS ======================
+      user.imageVerification = {
+        status: 0,
+        rejectionReason: null,
+        latestImage: user.profileImage || null
+      };
+
+      // Check profile image history array (Most recent upload is at the end of the array)
+      if (user.profileImageHistory && user.profileImageHistory.length > 0) {
+        const latestImageUpdate = user.profileImageHistory[user.profileImageHistory.length - 1];
+
+        user.imageVerification = {
+          // Status keys: 0 = Pending, 1 = Approved, 2 = Rejected
+          status: latestImageUpdate.status,
+          rejectionReason: latestImageUpdate.rejectionReason || null,
+          latestImage: latestImageUpdate.image
+        };
+      } else if (user.profileImage) {
+        // If user has an image but no history (e.g. Customers or legacy users)
+        user.imageVerification.status = 1; // Mark as auto-approved
+      }
+
+      // Optional: Remove the raw history array from response to keep payload clean
+      delete user.profileImageHistory;
+
+      // ====================== RESPONSE ======================
       return res.status(200).json({
         success: true,
         data: user,
@@ -1891,49 +1818,50 @@ module.exports = {
     }
   },
 
-testOtp: async (req, res) => {
+  testOtp: async (req, res) => {
     try {
-        const mobile = "8219891913";
-        const otp = "9898";
-        await sendSms(mobile  , otp);
+      const mobile = "8219891913";
+      const otp = "9898";
+      await sendSms(mobile, otp);
 
-        const response = await axios.post(
-            "https://control.msg91.com/api/v5/flow",
+      const response = await axios.post(
+        "https://control.msg91.com/api/v5/flow",
+        {
+          flow_id: "6a9867549bffba00f082a12",
+          sender: "smsind",
+          recipients: [
             {
-                flow_id: "6a9867549bffba00f082a12",
-                sender: "smsind",
-                recipients: [
-                    {
-                        mobiles: `91${mobile}`,
-                        OTP: otp
-                    }
-                ]
-            },
-            {
-                headers: {
-                    authkey: MSG91_AUTH_KEY,
-                    "Content-Type": "application/json"
-                }
+              mobiles: `91${mobile}`,
+              OTP: otp
             }
-        );
+          ]
+        },
+        {
+          headers: {
+            authkey: MSG91_AUTH_KEY,
+            "Content-Type": "application/json"
+          }
+        }
+      );
 
-        console.log("MSG91 Response:", response.data);
+      console.log("MSG91 Response:", response.data);
 
-        return res.status(200).json({
-            success: true,
-            msg91: response.data
-        });
+      return res.status(200).json({
+        success: true,
+        msg91: response.data
+      });
 
     } catch (error) {
-        console.log(
-            "MSG91 ERROR:",
-            error.response?.data || error.message
-        );
+      console.log(
+        "MSG91 ERROR:",
+        error.response?.data || error.message
+      );
 
-        return res.status(500).json({
-            success: false,
-            error: error.response?.data || error.message
-        });
+      return res.status(500).json({
+        success: false,
+        error: error.response?.data || error.message
+      });
     }
-}
+  }
+
 };

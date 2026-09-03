@@ -524,21 +524,16 @@ module.exports = {
         }
     },
 
-    // ============================================================
+  // ============================================================
     // REVIEW PROVIDER PROFILE IMAGE (ADMIN)
     // ============================================================
     reviewProviderImage: async (req, res) => {
         try {
-            // Optional: Admin Role Check
-            // if (Number(req.user.role) !== 2) {
-            //   return res.status(403).json({ success: false, message: 'Unauthorized access' });
-            // }
-
             const { providerId, imageId, status, rejectionReason } = req.body;
 
-            // status: 1 = Approve, 0 = Reject
-            if (![0,1].includes(Number(status))) {
-                return res.status(400).json({ success: false, message: 'Invalid status. Use 1 to approve, 0 to reject.' });
+            // FIX: status: 1 = Approve, 2 = Reject  (0 is for Pending)
+            if (![1, 2].includes(Number(status))) {
+                return res.status(400).json({ success: false, message: 'Invalid status. Use 1 to approve, 2 to reject.' });
             }
 
             // ====================== FIND PROVIDER ======================
@@ -549,20 +544,21 @@ module.exports = {
             }
 
             // ====================== FIND SPECIFIC IMAGE IN HISTORY ======================
-            // 'id()' Mongoose subdocuments par kaam karta hai
             const imageToReview = provider.profileImageHistory.id(imageId);
 
+            // 0 means Pending
             if (!imageToReview || imageToReview.status !== 0) {
                 return res.status(404).json({ success: false, message: 'Pending image not found or already reviewed' });
             }
 
             // ====================== APPROVE LOGIC ======================
             if (Number(status) === 1) {
-                imageToReview.status = 1;
+                imageToReview.status = 1; // 1 = Approved
                 imageToReview.reviewedAt = new Date();
 
-                // Make this image the main live profile image
+                // 👇 HAAN BHAI YAHAN ALREADY LIVE PROFILE IMAGE UPDATE HO RAHI HAI 👇
                 provider.profileImage = imageToReview.image;
+                
                 await provider.save();
 
                 // Send Success Notification
@@ -581,13 +577,13 @@ module.exports = {
             }
 
             // ====================== REJECT LOGIC ======================
-            else if (Number(status) === 0) {
-                if (!rejectionReason || rejectionReason.trim() === '') {
+            else if (Number(status) === 2) { // FIX: Use 2 for Reject
+                if (!rejectionReason || String(rejectionReason).trim() === '') {
                     return res.status(400).json({ success: false, message: 'Rejection reason is required' });
                 }
 
-                imageToReview.status = 0; // Explicitly mark as rejected        
-                imageToReview.rejectionReason = rejectionReason.trim();
+                imageToReview.status = 2; // FIX: 2 = Rejected
+                imageToReview.rejectionReason = String(rejectionReason).trim();
                 imageToReview.reviewedAt = new Date();
 
                 await provider.save();
@@ -598,7 +594,7 @@ module.exports = {
                         userId: provider._id,
                         type: 'IMAGE_REJECTED',
                         title: 'Profile Picture Rejected ❌',
-                        message: `Your new profile picture was rejected. Reason: ${rejectionReason.trim()}`,
+                        message: `Your new profile picture was rejected. Reason: ${String(rejectionReason).trim()}`,
                     });
                 } catch (notifyErr) {
                     console.error('Notification Error (Reject):', notifyErr.message);
