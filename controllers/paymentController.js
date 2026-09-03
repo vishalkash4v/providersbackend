@@ -165,7 +165,7 @@ const finalizeBookingPayment = async ({ payment }) => {
     // ========================================================
     // ALREADY FINALIZED (Early Exit)
     // ========================================================
-    if (offer.status === 3 && booking.provider && booking.provider.toString() === payment.provider.toString()) { 
+    if (offer.status === 3 && booking.provider && booking.provider.toString() === payment.provider.toString()) {
         payment.status = 'PAID';
         if (!payment.paidAt) payment.paidAt = new Date();
         await payment.save();
@@ -187,7 +187,7 @@ const finalizeBookingPayment = async ({ payment }) => {
     // ========================================================
     // OFFER MUST BE USER ACCEPTED
     // ========================================================
-    if (offer.status !== 1 && offer.status !== 3) { 
+    if (offer.status !== 1 && offer.status !== 3) {
         return { success: false, message: 'This offer is no longer waiting for provider approval' };
     }
 
@@ -217,11 +217,11 @@ const finalizeBookingPayment = async ({ payment }) => {
     if (!claimedBooking) {
         // Agar atomic claim fail hua, check karo ki kisne jeeta!
         const currentBooking = await Booking.findById(booking._id);
-        
+
         // Agar same provider ko assign ho gaya hai kisi dusri thread (e.g. Webhook/Sync) se
         if (currentBooking && currentBooking.provider && currentBooking.provider.toString() === payment.provider.toString()) {
             console.log('⚡ [Race Condition Resolved] Booking already assigned to THIS provider by another thread. No refund needed.');
-            
+
             payment.status = 'PAID';
             payment.paidAt = payment.paidAt || new Date();
             await payment.save();
@@ -274,7 +274,7 @@ const finalizeBookingPayment = async ({ payment }) => {
     // 👇 CUSTOMER KO NOTIFICATION BHEJO 👇
     try {
         await notifyUser({
-            userId: claimedBooking.user, 
+            userId: claimedBooking.user,
             type: 'BOOKING_CONFIRMED',
             title: 'Booking Confirmed! ✅',
             message: 'The provider has successfully paid the access fee and confirmed your booking.',
@@ -442,9 +442,6 @@ const renderBookingCheckout = async (req, res) => {
     }
 };
 
-// ============================================================
-// CREATE BOOKING PAYMENT ORDER
-// ============================================================
 const createBookingPaymentOrder = async (req, res) => {
     try {
         const { offerId } = req.body;
@@ -465,7 +462,8 @@ const createBookingPaymentOrder = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Provider approval window has expired' });
         }
 
-        const booking = await Booking.findById(offer.booking);
+        // 👇 PRO UPDATE: Populating service to get the name directly
+        const booking = await Booking.findById(offer.booking).populate('service', 'name');
         if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
         if (!booking.isActive || booking.status !== 0) return res.status(400).json({ success: false, message: 'This booking is no longer available' }); // 0 = PENDING
@@ -482,6 +480,15 @@ const createBookingPaymentOrder = async (req, res) => {
             name: `${provider.firstName} ${provider.lastName}`.trim(),
             email: provider.email || null,
             contact: provider.mobile || null,
+        };
+
+        // 👇 EXTRACT EXTRA UI DETAILS FOR FRONTEND 👇
+        const serviceName = booking.service?.name || 'Service';
+        const distanceKm = offer.distanceKm || 0;
+        const workLocation = {
+            name: booking.location?.name || 'Location not specified',
+            lat: booking.location?.coordinates?.[1] || null, // Index 1 is Lat in GeoJSON
+            lng: booking.location?.coordinates?.[0] || null  // Index 0 is Lng in GeoJSON
         };
 
         // ========================================================
@@ -507,7 +514,11 @@ const createBookingPaymentOrder = async (req, res) => {
                     currency: 'INR',
                     name: 'Provider App',
                     description: 'Free Booking via Credits',
-                    offerAmount: offer.offerAmount, // 👉 Added offerAmount
+                    offerAmount: offer.offerAmount,
+                    // 👇 Injected details for Payment UI
+                    serviceName,
+                    distanceKm,
+                    workLocation,
                     prefill: prefillData,
                 }
             });
@@ -516,7 +527,9 @@ const createBookingPaymentOrder = async (req, res) => {
         // ========================================================
         // 2. PAID BOOKING LOGIC
         // ========================================================
-        if (offer.distanceKm === null || offer.distanceKm === undefined) return res.status(400).json({ success: false, message: 'Booking distance is not available' });
+        if (offer.distanceKm === null || offer.distanceKm === undefined) {
+            return res.status(400).json({ success: false, message: 'Booking distance is not available' });
+        }
 
         const accessFee = getBookingAccessFee({ distanceKm: offer.distanceKm });
 
@@ -552,7 +565,11 @@ const createBookingPaymentOrder = async (req, res) => {
                     currency: 'INR',
                     name: 'Provider App',
                     description: 'Dummy payment',
-                    offerAmount: offer.offerAmount, // 👉 Added offerAmount
+                    offerAmount: offer.offerAmount,
+                    // 👇 Injected details for Payment UI
+                    serviceName,
+                    distanceKm,
+                    workLocation,
                     prefill: prefillData,
                 },
             });
@@ -584,7 +601,11 @@ const createBookingPaymentOrder = async (req, res) => {
                     currency: existingPayment.currency,
                     name: 'Provider App',
                     description: 'Booking access fee',
-                    offerAmount: offer.offerAmount, // 👉 Added offerAmount
+                    offerAmount: offer.offerAmount,
+                    // 👇 Injected details for Payment UI
+                    serviceName,
+                    distanceKm,
+                    workLocation,
                     prefill: prefillData,
                 },
             });
@@ -638,7 +659,11 @@ const createBookingPaymentOrder = async (req, res) => {
                 currency: razorpayOrder.currency,
                 name: 'Provider App',
                 description: 'Booking access fee',
-                offerAmount: offer.offerAmount, // 👉 Added offerAmount
+                offerAmount: offer.offerAmount,
+                // 👇 Injected details for Payment UI
+                serviceName,
+                distanceKm,
+                workLocation,
                 prefill: prefillData,
             },
         });
@@ -717,7 +742,7 @@ const verifyBookingPayment = async (req, res) => {
 // ============================================================
 const razorpayWebhook = async (req, res) => {
     console.log('--- 🚀 RAZORPAY WEBHOOK TRIGGERED ---');
-    
+
     // 1. Log basic headers
     const signature = req.headers['x-razorpay-signature'];
     const eventId = req.headers['x-razorpay-event-id'];
@@ -743,7 +768,7 @@ const razorpayWebhook = async (req, res) => {
         // 4. Verify Signature
         console.log('[Webhook] Verifying Signature...');
         const isValid = verifyWebhookSignature({ rawBody: req.body, signature });
-        
+
         if (!isValid) {
             console.error('❌ [Webhook Error] Signature Verification FAILED!');
             console.error(`- Received Signature: ${signature}`);
@@ -770,7 +795,7 @@ const razorpayWebhook = async (req, res) => {
         // ====================================================
         if (event === 'payment.captured' || event === 'order.paid') {
             console.log(`[Webhook] Processing Event: ${event}`);
-            
+
             let orderId = null;
             let paymentId = null;
 
@@ -810,9 +835,9 @@ const razorpayWebhook = async (req, res) => {
                 console.error('❌ [Webhook Error] Booking Finalization Failed:', result.message);
             }
 
-            return res.status(200).json({ 
-                success: true, 
-                message: result.success ? 'Payment webhook processed and booking finalized' : 'Payment webhook processed but booking lost to another provider' 
+            return res.status(200).json({
+                success: true,
+                message: result.success ? 'Payment webhook processed and booking finalized' : 'Payment webhook processed but booking lost to another provider'
             });
         }
 
@@ -824,7 +849,7 @@ const razorpayWebhook = async (req, res) => {
             // ... (Your existing failure handling code) ...
             const paymentId = eventBody?.payload?.payment?.entity?.id;
             const orderId = eventBody?.payload?.payment?.entity?.order_id;
-            
+
             let payment = null;
             if (orderId) payment = await BookingPayment.findOne({ razorpayOrderId: orderId });
             if (!payment && paymentId) payment = await BookingPayment.findOne({ razorpayPaymentId: paymentId });
@@ -858,7 +883,7 @@ const razorpayWebhook = async (req, res) => {
 const getBookingPaymentStatus = async (req, res) => {
     try {
         const { offerId } = req.params;
-        
+
         // 1. Database se payment nikaalo
         let payment = await BookingPayment.findOne({ offer: offerId, provider: req.user.id }).sort({ createdAt: -1 });
 
@@ -869,7 +894,7 @@ const getBookingPaymentStatus = async (req, res) => {
             try {
                 // Razorpay server se is Order ID ke saare payments fetch karo
                 const orderPayments = await razorpay.orders.fetchPayments(payment.razorpayOrderId);
-                
+
                 if (orderPayments && orderPayments.items && orderPayments.items.length > 0) {
                     // Check karo ki is order mein koi 'captured' (successful) payment hai kya
                     const capturedPayment = orderPayments.items.find(p => p.status === 'captured');
@@ -882,7 +907,7 @@ const getBookingPaymentStatus = async (req, res) => {
 
                         // Webhook aane se pehle hi humne khud finalize kar diya!
                         const result = await finalizeBookingPayment({ payment });
-                        payment = result.payment || payment; 
+                        payment = result.payment || payment;
 
                     } else if (failedPayment) {
                         console.log('🔄 [Live Sync] Payment failed on Razorpay. Updating DB...');

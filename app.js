@@ -240,7 +240,7 @@ app.use('/api/admin', adminRouter);
 
 app.use('/api/namezivo',namezivoRouter);
 
-app.use('/api/kyc', kycRouter); // 👉 KYC router use karo
+app.use('/api/kyc', kycRouter); 
 
 // ============================================================
 // UPLOADS STATIC
