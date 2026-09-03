@@ -25,29 +25,26 @@ const { notifyUser } = require('../utils/notification');
 // ============================================================
 const isRealPaymentMode = String(process.env.PAYMENT_MODE || 'false').toLowerCase() === 'true';
 
-// ============================================================
-// CALCULATE BOOKING ACCESS FEE
-// ============================================================
-// ============================================================
-// CALCULATE BOOKING ACCESS FEE (FLAT PRICING)
-// ============================================================
+
 const getBookingAccessFee = ({ distanceKm }) => {
-    const distance = Number(distanceKm);
-    if (!Number.isFinite(distance) || distance < 0) throw new Error('Invalid booking distance');
+    // Environment variables se price uthao
+    const STARTING_RANGE_PRICE = Number(process.env.STARTING_RANGE_PRICE || 90);
+    const ABOVE_RANGE_PRICE = Number(process.env.ABOVE_RANGE_PRICE || 40);
+    
+    // Yahan define karo ki 'Starting Range' kitne KM tak hai (e.g., 3 KM)
+    // Aap isko .env mein STARTING_RANGE_KM=3 rakh sakte ho
+    const BASE_KM = Number(process.env.STARTING_RANGE_KM || 3); 
 
-    const startingKmRange = Number(process.env.STARTING_KM_RANGE || 10);
-    const startingRangePrice = Number(process.env.STARTING_RANGE_PRICE || 90);
-    const extraFlatPrice = Number(process.env.ABOVE_RANGE_PRICE || 40);
-
-    let amount = startingRangePrice;
-
-    if (distance > startingKmRange) {
-        amount += extraFlatPrice; // Add the flat fee for exceeding the range
-    }
-
-    if (!Number.isFinite(amount) || amount <= 0) throw new Error('Invalid booking access fee');
-    return Number(amount.toFixed(2));
+    // Agar distance pata nahi hai, ya distance paas hai (<= BASE_KM)
+    if (!distanceKm || distanceKm <= BASE_KM) {
+        return STARTING_RANGE_PRICE; // Sirf ₹90 katega
+    } 
+    
+    // Agar distance door hai (> BASE_KM)
+    return ABOVE_RANGE_PRICE; // Sirf ₹40 katega
 };
+
+
 // ============================================================
 // COMPLETE REFERRAL
 // ============================================================
