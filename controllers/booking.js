@@ -166,7 +166,7 @@ const notifyExistingProvidersUnavailable = async (booking, customMessage = null)
 // ============================================================
 module.exports = {
 
-    createBooking: async (req, res) => {
+ createBooking: async (req, res) => {
         try {
             const required = ['service', 'latitude', 'longitude'];
             if (validate(req, res, required)) return;
@@ -204,142 +204,167 @@ module.exports = {
                 notifiedProviders: [],
             });
 
+            // 👇 FETCH KYC FOR NOTIFICATION & RESPONSE 👇
+            const kycData = await Kyc.findOne({ user: userId }).select('status rejectionReason').lean();
+            const kycStatus = kycData ? kycData.status : 0;
+            const rejectionReason = kycData?.rejectionReason || null;
+
+            // Attach directly to booking object so `notifyMatchingProviders` can access it
+            booking.kycStatus = kycStatus;
+            booking.rejectionReason = rejectionReason;
+            // 👆 ====================================== 👆
+
             await notifyMatchingProviders(booking, false);
 
             return res.status(201).json({
                 success: true,
-                message: 'Your request has been sent to nearby service providers. You can view details in My Bookings.'
+                message: 'Your request has been sent to nearby service providers. You can view details in My Bookings.',
+                kycVerification: {
+                    status: kycStatus,
+                    rejectionReason: rejectionReason,
+                    isVerified: kycStatus === 2
+                }
             });
         } catch (error) {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }
     },
 
-  updateBooking: async (req, res) => {
-    try {
-        const booking = await Booking.findOne({
-            _id: req.params.id,
-            user: req.user.id
-        });
-
-        if (!booking || booking.deletedAt) {
-            return res.status(404).json({
-                success: false,
-                message: 'Booking not found'
+    updateBooking: async (req, res) => {
+        try {
+            const booking = await Booking.findOne({
+                _id: req.params.id,
+                user: req.user.id
             });
-        }
 
-        if (booking.status !== 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'Booking can only be updated while pending'
-            });
-        }
+            if (!booking || booking.deletedAt) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Booking not found'
+                });
+            }
 
-        let updateMessage =
-            'The service request details have been updated by the customer.';
+            if (booking.status !== 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Booking can only be updated while pending'
+                });
+            }
 
-        // -------------------------
-        // Location / Address
-        // -------------------------
-        if (
-            req.body.latitude !== undefined ||
-            req.body.longitude !== undefined ||
-            req.body.address !== undefined
-        ) {
-            updateMessage =
-                'The location/address for the service request has been changed.';
+            let updateMessage = 'The service request details have been updated by the customer.';
 
+            // -------------------------
+            // Location / Address
+            // -------------------------
             if (
-                req.body.latitude !== undefined &&
-                req.body.longitude !== undefined
+                req.body.latitude !== undefined ||
+                req.body.longitude !== undefined ||
+                req.body.address !== undefined
             ) {
-                booking.location = {
-                    type: 'Point',
-                    coordinates: [
-                        Number(req.body.longitude),
-                        Number(req.body.latitude)
-                    ]
-                };
+                updateMessage = 'The location/address for the service request has been changed.';
+
+                if (
+                    req.body.latitude !== undefined &&
+                    req.body.longitude !== undefined
+                ) {
+                    booking.location = {
+                        type: 'Point',
+                        coordinates: [
+                            Number(req.body.longitude),
+                            Number(req.body.latitude)
+                        ]
+                    };
+                }
+
+                if (req.body.address !== undefined) {
+                    booking.address = req.body.address;
+                }
             }
 
-            if (req.body.address !== undefined) {
-                booking.address = req.body.address;
+            // -------------------------
+            // Date / Time
+            // -------------------------
+            if (
+                req.body.preferredDates !== undefined ||
+                req.body.preferredTimeStart !== undefined ||
+                req.body.preferredTimeEnd !== undefined
+            ) {
+                updateMessage = 'The preferred date and time for the service request has been changed.';
+
+                if (req.body.preferredDates !== undefined) {
+                    booking.preferredDates = req.body.preferredDates;
+                }
+
+                if (req.body.preferredTimeStart !== undefined) {
+                    booking.preferredTimeStart = req.body.preferredTimeStart;
+                }
+
+                if (req.body.preferredTimeEnd !== undefined) {
+                    booking.preferredTimeEnd = req.body.preferredTimeEnd;
+                }
             }
+
+            // -------------------------
+            // Description / Materials
+            // -------------------------
+            if (
+                req.body.description !== undefined ||
+                req.body.materialRequired !== undefined ||
+                req.body.materialOption !== undefined
+            ) {
+                updateMessage = 'The description or material requirements for the service request have been updated.';
+
+                if (req.body.description !== undefined) {
+                    booking.description = req.body.description;
+                }
+
+                if (req.body.materialRequired !== undefined) {
+                    booking.materialRequired =
+                        req.body.materialRequired === true ||
+                        req.body.materialRequired === 'true';
+                }
+
+                if (req.body.materialOption !== undefined) {
+                    booking.materialOption = req.body.materialOption;
+                }
+            }
+
+            await booking.save();
+
+            // 👇 FETCH KYC FOR NOTIFICATION & RESPONSE 👇
+            const kycData = await Kyc.findOne({ user: req.user.id }).select('status rejectionReason').lean();
+            const kycStatus = kycData ? kycData.status : 0;
+            const rejectionReason = kycData?.rejectionReason || null;
+
+            // Attach directly to booking object so `notifyMatchingProviders` can access it
+            booking.kycStatus = kycStatus;
+            booking.rejectionReason = rejectionReason;
+            // 👆 ====================================== 👆
+
+            await notifyMatchingProviders(
+                booking,
+                true,
+                updateMessage
+            );
+
+            return res.status(200).json({
+                success: true,
+                message: 'Your request has been updated and nearby providers have been notified.',
+                kycVerification: {
+                    status: kycStatus,
+                    rejectionReason: rejectionReason,
+                    isVerified: kycStatus === 2
+                }
+            });
+
+        } catch (error) {
+            return res.status(500).json({
+                success: false,
+                message: 'Something went wrong',
+                error: error.message
+            });
         }
-
-        // -------------------------
-        // Date / Time
-        // -------------------------
-        if (
-            req.body.preferredDates !== undefined ||
-            req.body.preferredTimeStart !== undefined ||
-            req.body.preferredTimeEnd !== undefined
-        ) {
-            updateMessage =
-                'The preferred date and time for the service request has been changed.';
-
-            if (req.body.preferredDates !== undefined) {
-                booking.preferredDates = req.body.preferredDates;
-            }
-
-            if (req.body.preferredTimeStart !== undefined) {
-                booking.preferredTimeStart = req.body.preferredTimeStart;
-            }
-
-            if (req.body.preferredTimeEnd !== undefined) {
-                booking.preferredTimeEnd = req.body.preferredTimeEnd;
-            }
-        }
-
-        // -------------------------
-        // Description / Materials
-        // -------------------------
-        if (
-            req.body.description !== undefined ||
-            req.body.materialRequired !== undefined ||
-            req.body.materialOption !== undefined
-        ) {
-            updateMessage =
-                'The description or material requirements for the service request have been updated.';
-
-            if (req.body.description !== undefined) {
-                booking.description = req.body.description;
-            }
-
-            if (req.body.materialRequired !== undefined) {
-                booking.materialRequired =
-                    req.body.materialRequired === true ||
-                    req.body.materialRequired === 'true';
-            }
-
-            if (req.body.materialOption !== undefined) {
-                booking.materialOption = req.body.materialOption;
-            }
-        }
-
-        await booking.save();
-
-        await notifyMatchingProviders(
-            booking,
-            true,
-            updateMessage
-        );
-
-        return res.status(200).json({
-            success: true,
-            message:
-                'Your request has been updated and nearby providers have been notified.'
-        });
-
-    } catch (error) {
-        return res.status(500).json({
-            success: false,
-            message: 'Something went wrong',
-            error: error.message
-        });
-    }
-},
+    },
 
     deleteBooking: async (req, res) => {
         try {
