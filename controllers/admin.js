@@ -6,6 +6,7 @@ const BookingPayment = require('../models/BookingPayment');
 const Service = require('../models/Service');
 const TokenBlacklist = require('../models/TokenBlacklist');
 const Support = require('../models/Support');
+const Kyc = require('../models/Kyc');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Policy = require('../models/Policy');
