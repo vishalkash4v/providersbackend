@@ -39,6 +39,9 @@ const normalizeImagePaths = (images) => {
 // ============================================================
 // NOTIFY MATCHING PROVIDERS (WITH DYNAMIC UPDATE MESSAGES)
 // ============================================================
+// ============================================================
+// NOTIFY MATCHING PROVIDERS (WITH KYC DATA INJECTION)
+// ============================================================
 const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage = null) => {
     try {
         const serviceId = booking.service?._id ? booking.service._id : booking.service;
@@ -63,9 +66,11 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
             const providerId = profile.user._id.toString();
             const customerId = booking.user?._id ? booking.user._id.toString() : booking.user.toString();
             if (providerId === customerId) continue;
+            
             // 👇 NAYA CODE: Agar provider ne booking hide/remove ki hai, toh usko ignore karo 👇
             const ignoredIds = (booking.ignoredProviders || []).map(id => id.toString());
             if (ignoredIds.includes(providerId)) continue;
+            
             if (!profile.location || !Array.isArray(profile.location.coordinates) || profile.location.coordinates.length !== 2) continue;
 
             const [providerLng, providerLat] = profile.location.coordinates;
@@ -85,6 +90,12 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
         const existingProviderIds = currentProviderIds.filter((id) => oldProviderIds.includes(id));
         const removedProviderIds = oldProviderIds.filter((id) => !currentProviderIds.includes(id));
 
+        // 👇 KYC Data Extracted from Booking Object 👇
+        const kycPayload = {
+            kycStatus: String(booking.kycStatus ?? 0),
+            rejectionReason: booking.rejectionReason || ''
+        };
+
         // 1. Notify completely NEW providers
         for (const providerId of newProviderIds) {
             const distance = providerDistances.get(providerId);
@@ -96,6 +107,8 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
                     message: `Someone is looking for ${service.name} approximately ${Number(distance).toFixed(1)} km from you.`,
                     bookingId: booking._id,
                     serviceId: service._id,
+                    // 👉 ADDED KYC DATA HERE
+                    data: kycPayload
                 });
             } catch (error) { }
         }
@@ -109,8 +122,10 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
                         userId: providerId,
                         type: 'BOOKING_UPDATED',
                         title: 'Booking Updated',
-                        message: updateMessage || defaultMsg, // Custom message inserted here!
+                        message: updateMessage || defaultMsg,
                         bookingId: booking._id,
+                        // 👉 ADDED KYC DATA HERE
+                        data: kycPayload
                     });
                 } catch (error) { }
             }
@@ -166,11 +181,13 @@ const notifyExistingProvidersUnavailable = async (booking, customMessage = null)
 // ============================================================
 module.exports = {
 
- createBooking: async (req, res) => {
+// File ke top par yeh add karna mat bhoolna agar nahi hai toh:
+// const Kyc = require('../models/Kyc');
+
+    createBooking: async (req, res) => {
         try {
             const required = ['service', 'latitude', 'longitude'];
             if (validate(req, res, required)) return;
-            console.log('Booking Creation Request:', req.body);
 
             const { service: serviceId, description, materialRequired, materialOption, latitude, longitude, address, visitPreference, preferredDates, preferredTimeStart, preferredTimeEnd } = req.body;
             const userId = req.user.id;
@@ -182,10 +199,7 @@ module.exports = {
 
             const lat = Number(latitude);
             const lng = Number(longitude);
-
-            const materialRequiredValue =
-                materialRequired === true ||
-                materialRequired === 'true';
+            const materialRequiredValue = materialRequired === true || materialRequired === 'true';
 
             const booking = await Booking.create({
                 user: userId,
@@ -198,32 +212,23 @@ module.exports = {
                 location: { type: 'Point', coordinates: [lng, lat] },
                 address: address ? address.trim() : '',
                 visitPreference: visitPreference || 'immediate',
-                status: 0, // 0 = Pending
+                status: 0, 
                 isActive: true,
                 deletedAt: null,
                 notifiedProviders: [],
             });
 
-            // 👇 FETCH KYC FOR NOTIFICATION & RESPONSE 👇
+            // 👇 KYC DATA FETCH KARKE BOOKING MEIN ADD KIYA 👇
             const kycData = await Kyc.findOne({ user: userId }).select('status rejectionReason').lean();
-            const kycStatus = kycData ? kycData.status : 0;
-            const rejectionReason = kycData?.rejectionReason || null;
-
-            // Attach directly to booking object so `notifyMatchingProviders` can access it
-            booking.kycStatus = kycStatus;
-            booking.rejectionReason = rejectionReason;
-            // 👆 ====================================== 👆
+            booking.kycStatus = kycData ? kycData.status : 0;
+            booking.rejectionReason = kycData?.rejectionReason || null;
+            // 👆 ========================================= 👆
 
             await notifyMatchingProviders(booking, false);
 
             return res.status(201).json({
                 success: true,
-                message: 'Your request has been sent to nearby service providers. You can view details in My Bookings.',
-                kycVerification: {
-                    status: kycStatus,
-                    rejectionReason: rejectionReason,
-                    isVerified: kycStatus === 2
-                }
+                message: 'Your request has been sent to nearby service providers. You can view details in My Bookings.'
             });
         } catch (error) {
             return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
@@ -232,137 +237,58 @@ module.exports = {
 
     updateBooking: async (req, res) => {
         try {
-            const booking = await Booking.findOne({
-                _id: req.params.id,
-                user: req.user.id
-            });
+            const booking = await Booking.findOne({ _id: req.params.id, user: req.user.id });
 
             if (!booking || booking.deletedAt) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Booking not found'
-                });
+                return res.status(404).json({ success: false, message: 'Booking not found' });
             }
-
             if (booking.status !== 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Booking can only be updated while pending'
-                });
+                return res.status(400).json({ success: false, message: 'Booking can only be updated while pending' });
             }
 
             let updateMessage = 'The service request details have been updated by the customer.';
 
-            // -------------------------
-            // Location / Address
-            // -------------------------
-            if (
-                req.body.latitude !== undefined ||
-                req.body.longitude !== undefined ||
-                req.body.address !== undefined
-            ) {
+            if (req.body.latitude !== undefined || req.body.longitude !== undefined || req.body.address !== undefined) {
                 updateMessage = 'The location/address for the service request has been changed.';
-
-                if (
-                    req.body.latitude !== undefined &&
-                    req.body.longitude !== undefined
-                ) {
+                if (req.body.latitude !== undefined && req.body.longitude !== undefined) {
                     booking.location = {
                         type: 'Point',
-                        coordinates: [
-                            Number(req.body.longitude),
-                            Number(req.body.latitude)
-                        ]
+                        coordinates: [Number(req.body.longitude), Number(req.body.latitude)]
                     };
                 }
-
-                if (req.body.address !== undefined) {
-                    booking.address = req.body.address;
-                }
+                if (req.body.address !== undefined) booking.address = req.body.address;
             }
 
-            // -------------------------
-            // Date / Time
-            // -------------------------
-            if (
-                req.body.preferredDates !== undefined ||
-                req.body.preferredTimeStart !== undefined ||
-                req.body.preferredTimeEnd !== undefined
-            ) {
+            if (req.body.preferredDates !== undefined || req.body.preferredTimeStart !== undefined || req.body.preferredTimeEnd !== undefined) {
                 updateMessage = 'The preferred date and time for the service request has been changed.';
-
-                if (req.body.preferredDates !== undefined) {
-                    booking.preferredDates = req.body.preferredDates;
-                }
-
-                if (req.body.preferredTimeStart !== undefined) {
-                    booking.preferredTimeStart = req.body.preferredTimeStart;
-                }
-
-                if (req.body.preferredTimeEnd !== undefined) {
-                    booking.preferredTimeEnd = req.body.preferredTimeEnd;
-                }
+                if (req.body.preferredDates !== undefined) booking.preferredDates = req.body.preferredDates;
+                if (req.body.preferredTimeStart !== undefined) booking.preferredTimeStart = req.body.preferredTimeStart;
+                if (req.body.preferredTimeEnd !== undefined) booking.preferredTimeEnd = req.body.preferredTimeEnd;
             }
 
-            // -------------------------
-            // Description / Materials
-            // -------------------------
-            if (
-                req.body.description !== undefined ||
-                req.body.materialRequired !== undefined ||
-                req.body.materialOption !== undefined
-            ) {
+            if (req.body.description !== undefined || req.body.materialRequired !== undefined || req.body.materialOption !== undefined) {
                 updateMessage = 'The description or material requirements for the service request have been updated.';
-
-                if (req.body.description !== undefined) {
-                    booking.description = req.body.description;
-                }
-
-                if (req.body.materialRequired !== undefined) {
-                    booking.materialRequired =
-                        req.body.materialRequired === true ||
-                        req.body.materialRequired === 'true';
-                }
-
-                if (req.body.materialOption !== undefined) {
-                    booking.materialOption = req.body.materialOption;
-                }
+                if (req.body.description !== undefined) booking.description = req.body.description;
+                if (req.body.materialRequired !== undefined) booking.materialRequired = req.body.materialRequired === true || req.body.materialRequired === 'true';
+                if (req.body.materialOption !== undefined) booking.materialOption = req.body.materialOption;
             }
 
             await booking.save();
 
-            // 👇 FETCH KYC FOR NOTIFICATION & RESPONSE 👇
+            // 👇 KYC DATA FETCH KARKE BOOKING MEIN ADD KIYA 👇
             const kycData = await Kyc.findOne({ user: req.user.id }).select('status rejectionReason').lean();
-            const kycStatus = kycData ? kycData.status : 0;
-            const rejectionReason = kycData?.rejectionReason || null;
+            booking.kycStatus = kycData ? kycData.status : 0;
+            booking.rejectionReason = kycData?.rejectionReason || null;
+            // 👆 ========================================= 👆
 
-            // Attach directly to booking object so `notifyMatchingProviders` can access it
-            booking.kycStatus = kycStatus;
-            booking.rejectionReason = rejectionReason;
-            // 👆 ====================================== 👆
-
-            await notifyMatchingProviders(
-                booking,
-                true,
-                updateMessage
-            );
+            await notifyMatchingProviders(booking, true, updateMessage);
 
             return res.status(200).json({
                 success: true,
-                message: 'Your request has been updated and nearby providers have been notified.',
-                kycVerification: {
-                    status: kycStatus,
-                    rejectionReason: rejectionReason,
-                    isVerified: kycStatus === 2
-                }
+                message: 'Your request has been updated and nearby providers have been notified.'
             });
-
         } catch (error) {
-            return res.status(500).json({
-                success: false,
-                message: 'Something went wrong',
-                error: error.message
-            });
+            return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
         }
     },
 
