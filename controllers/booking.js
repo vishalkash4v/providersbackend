@@ -40,7 +40,7 @@ const normalizeImagePaths = (images) => {
 // NOTIFY MATCHING PROVIDERS (WITH DYNAMIC UPDATE MESSAGES)
 // ============================================================
 // ============================================================
-// NOTIFY MATCHING PROVIDERS (WITH KYC DATA INJECTION)
+// NOTIFY MATCHING PROVIDERS (WITH SPECIFIC PROVIDER KYC INJECTION)
 // ============================================================
 const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage = null) => {
     try {
@@ -67,7 +67,6 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
             const customerId = booking.user?._id ? booking.user._id.toString() : booking.user.toString();
             if (providerId === customerId) continue;
             
-            // 👇 NAYA CODE: Agar provider ne booking hide/remove ki hai, toh usko ignore karo 👇
             const ignoredIds = (booking.ignoredProviders || []).map(id => id.toString());
             if (ignoredIds.includes(providerId)) continue;
             
@@ -90,15 +89,27 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
         const existingProviderIds = currentProviderIds.filter((id) => oldProviderIds.includes(id));
         const removedProviderIds = oldProviderIds.filter((id) => !currentProviderIds.includes(id));
 
-        // 👇 KYC Data Extracted from Booking Object 👇
-        const kycPayload = {
-            kycStatus: String(booking.kycStatus ?? 0),
-            rejectionReason: booking.rejectionReason || ''
-        };
+        // 👇 NAYA CODE: Sirf unhi PROVIDERS ka KYC fetch karo jinko notification jaana hai 👇
+        const allProvidersToNotify = [...newProviderIds, ...existingProviderIds];
+        const providerKycs = await Kyc.find({ user: { $in: allProvidersToNotify } }).lean();
+        
+        // Ek map bana lete hain taaki fast lookup ho sake
+        const kycMap = new Map();
+        providerKycs.forEach(kyc => {
+            kycMap.set(kyc.user.toString(), {
+                kycStatus: String(kyc.status ?? 0),
+                rejectionReason: kyc.rejectionReason || ''
+            });
+        });
+        // 👆 ========================================================================= 👆
 
         // 1. Notify completely NEW providers
         for (const providerId of newProviderIds) {
             const distance = providerDistances.get(providerId);
+            
+            // Is specific provider ka KYC nikalo, nahi mila toh default 0
+            const pKyc = kycMap.get(providerId) || { kycStatus: '0', rejectionReason: '' };
+
             try {
                 await notifyUser({
                     userId: providerId,
@@ -107,8 +118,11 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
                     message: `Someone is looking for ${service.name} approximately ${Number(distance).toFixed(1)} km from you.`,
                     bookingId: booking._id,
                     serviceId: service._id,
-                    // 👉 ADDED KYC DATA HERE
-                    data: kycPayload
+                    // 👉 PROVIDER KA APNA KYC DATA HERE
+                    data: {
+                        kycStatus: pKyc.kycStatus,
+                        rejectionReason: pKyc.rejectionReason
+                    }
                 });
             } catch (error) { }
         }
@@ -117,6 +131,10 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
         if (isUpdate) {
             const defaultMsg = `The ${service.name} service request has been updated.`;
             for (const providerId of existingProviderIds) {
+                
+                // Is specific provider ka KYC nikalo
+                const pKyc = kycMap.get(providerId) || { kycStatus: '0', rejectionReason: '' };
+
                 try {
                     await notifyUser({
                         userId: providerId,
@@ -124,8 +142,11 @@ const notifyMatchingProviders = async (booking, isUpdate = false, updateMessage 
                         title: 'Booking Updated',
                         message: updateMessage || defaultMsg,
                         bookingId: booking._id,
-                        // 👉 ADDED KYC DATA HERE
-                        data: kycPayload
+                        // 👉 PROVIDER KA APNA KYC DATA HERE
+                        data: {
+                            kycStatus: pKyc.kycStatus,
+                            rejectionReason: pKyc.rejectionReason
+                        }
                     });
                 } catch (error) { }
             }
