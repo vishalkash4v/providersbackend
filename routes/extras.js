@@ -11,8 +11,7 @@ const {
 } = require('../middleware/jwt');
 
 router.post(
-  '/upload',
-  authenticateToken,
+  '/upload',  
   uploadController.upload
 );
 
