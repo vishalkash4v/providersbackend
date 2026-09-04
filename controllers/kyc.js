@@ -70,7 +70,7 @@ module.exports = {
         }
     },
 
-    // ============================================================
+   // ============================================================
     // 2. VERIFY / REJECT KYC (Admin Side)
     // ============================================================
     reviewKyc: async (req, res) => {
@@ -110,13 +110,13 @@ module.exports = {
                 });
             }
 
-            // Update DB
+            // Update DB (Admin can change status at ANY time, overriding old status)
             kyc.status = numericStatus;
             kyc.rejectionReason = numericStatus === 3 ? safeReason : null;
             kyc.verifiedAt = new Date();
             await kyc.save();
 
-            // Update User Profile
+            // Update User Profile (Reverses cleanly if Admin changes mind/fixes mistake)
             if (numericStatus === 2) {
                 await User.findByIdAndUpdate(kyc.user, { $set: { isKycVerified: true } });
             } else if (numericStatus === 3) {
@@ -135,7 +135,12 @@ module.exports = {
                     type: numericStatus === 2 ? 'KYC_APPROVED' : 'KYC_REJECTED',
                     title,
                     message,
-                    data: { kycId: kyc._id }
+                    // 👇 ADDED KYC STATUS & REASON TO NOTIFICATION DATA 👇
+                    data: { 
+                        kycId: String(kyc._id),
+                        kycStatus: String(numericStatus),
+                        rejectionReason: numericStatus === 3 ? safeReason : ''
+                    }
                 });
             } catch (notifyErr) {
                 console.error('Notification Error:', notifyErr.message);
