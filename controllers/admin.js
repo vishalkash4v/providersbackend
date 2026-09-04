@@ -160,20 +160,40 @@ module.exports = {
         } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
     },
 
-    // ============================================================
+// ============================================================
     // 🛠️ PROVIDERS CRUD
     // ============================================================
     getAllProviders: async (req, res) => {
         try {
             const providers = await User.find({ role: 1 }).sort({ createdAt: -1 }).select('-password');
             const profiles = await ProviderProfile.find().populate('services', 'name').lean();
+            
+            // 👇 Fetch KYC records for all fetched providers
+            const providerIds = providers.map(p => p._id);
+            const kycs = await Kyc.find({ user: { $in: providerIds } }).lean();
 
             const data = providers.map(provider => {
                 const profile = profiles.find(p => p.user.toString() === provider._id.toString());
-                return { ...provider.toObject(), profile: profile || null };
+                const kyc = kycs.find(k => k.user.toString() === provider._id.toString());
+                
+                return { 
+                    ...provider.toObject(), 
+                    profile: profile || null,
+                    
+                    // 👇 Injecting KYC Data 👇
+                    kycStatus: kyc ? kyc.status : 0, 
+                    kycRejectionReason: kyc?.rejectionReason || null,
+                    
+                    // Overriding isVerified so Lovable frontend works automatically without updates!
+                    isVerified: kyc ? (kyc.status === 2) : false, 
+                    isKycVerified: kyc ? (kyc.status === 2) : false 
+                };
             });
+            
             return res.status(200).json({ success: true, count: data.length, data });
-        } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
+        } catch (error) { 
+            return res.status(500).json({ success: false, message: error.message }); 
+        }
     },
 
     getProviderById: async (req, res) => {
