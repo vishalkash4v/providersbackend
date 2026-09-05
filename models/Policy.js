@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const policySchema = new mongoose.Schema({
     type: {
         type: String,
-        enum: ['TERMS', 'PRIVACY'],
+        enum: ['TERMS', 'PRIVACY','REFUND'],
         required: true,
         unique: true // Ensures only one T&C and one Privacy Policy exists
     },

@@ -443,7 +443,7 @@ module.exports = {
             if (!type || !content) return res.status(400).json({ success: false, message: 'Type and content are required' });
 
             const policyType = type.toUpperCase();
-            if (!['TERMS', 'PRIVACY'].includes(policyType)) {
+            if (!['TERMS', 'PRIVACY','REFUND'].includes(policyType)) {
                 return res.status(400).json({ success: false, message: 'Invalid policy type' });
             }
 
