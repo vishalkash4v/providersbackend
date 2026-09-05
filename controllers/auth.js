@@ -44,401 +44,401 @@ if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length === 0) {
 module.exports = {
 
 // ============================================================
-  // REGISTER API
-  // ============================================================
-  register: async (req, res) => {
-    try {
-      const required = [
-        'firstName',
-    
-        'mobile',
-        'email',
-        'password',
-        'role',
-      ];
+// REGISTER API
+// ============================================================
+register: async (req, res) => {
+  try {
+    const required = [
+      'firstName',
+      'mobile',
+      'email',
+      'password',
+      'role',
+    ];
 
-      if (validate(req, res, required)) return;
+    if (validate(req, res, required)) return;
 
-      const {
-        firstName,
-        lastName,
-        mobile,
-        email,
-        password,
-        role,
-        latitude,
-        longitude,
-        locationName,
-        referralCode: enteredReferralCode,
-        profileImage,
-        countryCode, // <--- Extracted
-        deviceToken,
-        deviceType = 0,
-      } = req.body;
+    const {
+      firstName,
+      lastName,
+      mobile,
+      email,
+      password,
+      role,
+      latitude,
+      longitude,
+      locationName,
+      referralCode: enteredReferralCode,
+      profileImage,
+      countryCode,
+      deviceToken,
+      deviceType = 0,
+    } = req.body;
 
-      const normalizedEmail = email.trim().toLowerCase();
-      const normalizedMobile = mobile.trim();
-      const normalizedCountryCode = countryCode ? countryCode.trim() : '+91'; // Fallback to default
-      const normalizedDeviceType = Number(deviceType);
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedMobile = mobile.trim();
+    const normalizedCountryCode = countryCode ? countryCode.trim() : '+91';
+    const normalizedDeviceType = Number(deviceType);
+    const normalizedLastName = lastName ? lastName.trim() : ''; // Handle optional lastName
 
-      if (![0, 1].includes(normalizedDeviceType)) {
-        return res.status(400).json({ success: false, message: 'Invalid device type. Use 0 for Android or 1 for iOS' });
+    if (![0, 1].includes(normalizedDeviceType)) {
+      return res.status(400).json({ success: false, message: 'Invalid device type. Use 0 for Android or 1 for iOS' });
+    }
+
+    const existingEmailUser = await User.findOne({ email: normalizedEmail });
+    const existingMobileUser = await User.findOne({ mobile: normalizedMobile });
+
+    if (existingEmailUser && existingEmailUser.isVerified) {
+      return res.status(400).json({ success: false, message: 'Email already registered' });
+    }
+
+    if (existingMobileUser && existingMobileUser.isVerified) {
+      return res.status(400).json({ success: false, message: 'Mobile number already registered' });
+    }
+
+    if (
+      existingEmailUser &&
+      existingMobileUser &&
+      existingEmailUser._id.toString() !== existingMobileUser._id.toString()
+    ) {
+      return res.status(400).json({ success: false, message: 'Email and Mobile number are associated with different accounts' });
+    }
+
+    const existingUser = existingEmailUser || existingMobileUser;
+
+    let referredBy = existingUser?.referredBy || null;
+
+    if (enteredReferralCode && enteredReferralCode.trim() !== '') {
+      const normalizedReferralCode = enteredReferralCode.trim().toUpperCase();
+      const referringUser = await User.findOne({ referralCode: normalizedReferralCode, isActive: true });
+
+      if (!referringUser) return res.status(400).json({ success: false, message: 'Invalid referral code' });
+      if (existingUser && referringUser._id.toString() === existingUser._id.toString()) {
+        return res.status(400).json({ success: false, message: 'You cannot use your own referral code' });
+      }
+      referredBy = referringUser._id;
+    }
+
+    let location = existingUser?.location || null;
+    const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
+    const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
+    const hasLocationName = locationName && locationName.trim() !== '';
+
+    if (hasLatitude || hasLongitude || hasLocationName) {
+      if (!hasLatitude || !hasLongitude) {
+        return res.status(400).json({ success: false, message: 'Both latitude and longitude are required when providing location' });
       }
 
-      const existingEmailUser = await User.findOne({ email: normalizedEmail });
-      const existingMobileUser = await User.findOne({ mobile: normalizedMobile });
+      const lat = Number(latitude);
+      const lng = Number(longitude);
 
-      if (existingEmailUser && existingEmailUser.isVerified) {
-        return res.status(400).json({ success: false, message: 'Email already registered' });
-      }
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
+      if (lat < -90 || lat > 90) return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
+      if (lng < -180 || lng > 180) return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
 
-      if (existingMobileUser && existingMobileUser.isVerified) {
-        return res.status(400).json({ success: false, message: 'Mobile number already registered' });
-      }
+      location = { type: 'Point', coordinates: [lng, lat] };
+      if (hasLocationName) location.name = locationName.trim();
+    }
 
-      if (
-        existingEmailUser &&
-        existingMobileUser &&
-        existingEmailUser._id.toString() !== existingMobileUser._id.toString()
-      ) {
-        return res.status(400).json({ success: false, message: 'Email and Mobile number are associated with different accounts' });
-      }
+    const finalProfileImage = profileImage || existingUser?.profileImage || '';
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
-      const existingUser = existingEmailUser || existingMobileUser;
+    // ============================================================
+    // EXISTING UNVERIFIED USER UPDATE
+    // ============================================================
+    if (existingUser) {
+      existingUser.firstName = firstName.trim();
+      existingUser.lastName = normalizedLastName;
+      existingUser.mobile = normalizedMobile;
+      existingUser.countryCode = normalizedCountryCode;
+      existingUser.email = normalizedEmail;
+      existingUser.password = hashedPassword;
+      existingUser.role = Number(role);
+      existingUser.referredBy = referredBy;
+      existingUser.profileImage = finalProfileImage;
+      existingUser.otp = otp;
+      existingUser.otpExpires = otpExpires;
+      existingUser.otpType = 0;
+      existingUser.otpVerified = false;
+      existingUser.isVerified = false;
 
-      let referredBy = existingUser?.referredBy || null;
+      if (location) existingUser.location = location;
+      await existingUser.save();
 
-      if (enteredReferralCode && enteredReferralCode.trim() !== '') {
-        const normalizedReferralCode = enteredReferralCode.trim().toUpperCase();
-        const referringUser = await User.findOne({ referralCode: normalizedReferralCode, isActive: true });
-
-        if (!referringUser) return res.status(400).json({ success: false, message: 'Invalid referral code' });
-        if (existingUser && referringUser._id.toString() === existingUser._id.toString()) {
-          return res.status(400).json({ success: false, message: 'You cannot use your own referral code' });
-        }
-        referredBy = referringUser._id;
-      }
-
-      let location = existingUser?.location || null;
-      const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
-      const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
-      const hasLocationName = locationName && locationName.trim() !== '';
-
-      if (hasLatitude || hasLongitude || hasLocationName) {
-        if (!hasLatitude || !hasLongitude) {
-          return res.status(400).json({ success: false, message: 'Both latitude and longitude are required when providing location' });
-        }
-
-        const lat = Number(latitude);
-        const lng = Number(longitude);
-
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
-        if (lat < -90 || lat > 90) return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
-        if (lng < -180 || lng > 180) return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
-
-        location = { type: 'Point', coordinates: [lng, lat] };
-        if (hasLocationName) location.name = locationName.trim();
-      }
-
-      const finalProfileImage = profileImage || existingUser?.profileImage || '';
-      const hashedPassword = await bcrypt.hash(password, 12);
-      const otp = Math.floor(1000 + Math.random() * 9000).toString();
-      const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-
-      // ============================================================
-      // EXISTING UNVERIFIED USER UPDATE
-      // ============================================================
-      if (existingUser) {
-        existingUser.firstName = firstName.trim();
-        existingUser.lastName = lastName.trim();
-        existingUser.mobile = normalizedMobile;
-        existingUser.countryCode = normalizedCountryCode; // <--- Saved
-        existingUser.email = normalizedEmail;
-        existingUser.password = hashedPassword;
-        existingUser.role = Number(role);
-        existingUser.referredBy = referredBy;
-        existingUser.profileImage = finalProfileImage;
-        existingUser.otp = otp;
-        existingUser.otpExpires = otpExpires;
-        existingUser.otpType = 0;
-        existingUser.otpVerified = false;
-        existingUser.isVerified = false;
-
-        if (location) existingUser.location = location;
-        await existingUser.save();
-
-        if (Number(existingUser.role) === 1 && referredBy) {
-          const referringUser = await User.findById(referredBy).select('_id role');
-          if (referringUser && Number(referringUser.role) === 1) {
-            const existingReferral = await Referral.findOne({ referredProvider: existingUser._id });
-            if (!existingReferral) {
-              await Referral.create({
-                referrer: referringUser._id,
-                referredProvider: existingUser._id,
-                referralCode: enteredReferralCode.trim().toUpperCase(),
-                status: 'PENDING',
-                rewardCredits: 0,
-              });
-            }
-          }
-        }
-
-        await saveUserDevice({ userId: existingUser._id, deviceToken, deviceType: normalizedDeviceType });
-
-        await sendEmail({
-          email: existingUser.email,
-          subject: 'OTP Verification - Provider App',
-          html: `<h2>Hello ${existingUser.firstName},</h2><p>Your new OTP for verification is:</p><h1 style="letter-spacing: 5px;">${otp}</h1><p>This OTP is valid for 10 minutes.</p>`,
-        });
-
-        const token = generateToken(existingUser);
-
-        return res.status(200).json({
-          success: true,
-          message: 'Registration details updated. New OTP sent to your email.',
-          token,
-          data: {
-            userId: existingUser._id,
-            firstName: existingUser.firstName,
-            lastName: existingUser.lastName,
-            email: existingUser.email,
-            countryCode: existingUser.countryCode, // <--- Returned
-            mobile: existingUser.mobile,
-            role: existingUser.role,
-            referralCode: existingUser.referralCode,
-            referredBy: existingUser.referredBy,
-            profileImage: existingUser.profileImage,
-            location: existingUser.location || null,
-            isVerified: existingUser.isVerified,
-          },
-        });
-      }
-
-      // ============================================================
-      // NEW USER
-      // ============================================================
-      let userReferralCode;
-      while (true) {
-        userReferralCode = generateReferralCode();
-        const exists = await User.findOne({ referralCode: userReferralCode });
-        if (!exists) break;
-      }
-
-      const userData = {
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        mobile: normalizedMobile,
-        countryCode: normalizedCountryCode, // <--- Saved
-        email: normalizedEmail,
-        password: hashedPassword,
-        role: Number(role),
-        referralCode: userReferralCode,
-        referredBy,
-        profileImage: finalProfileImage,
-        profileImageHistory: [],
-        otp,
-        otpExpires,
-        otpType: 0,
-        otpVerified: false,
-        isVerified: false,
-      };
-
-      if (location) userData.location = location;
-      const user = await User.create(userData);
-
-      if (Number(user.role) === 1 && referredBy) {
+      if (Number(existingUser.role) === 1 && referredBy) {
         const referringUser = await User.findById(referredBy).select('_id role');
         if (referringUser && Number(referringUser.role) === 1) {
-          await Referral.create({
-            referrer: referringUser._id,
-            referredProvider: user._id,
-            referralCode: enteredReferralCode.trim().toUpperCase(),
-            status: 'PENDING',
-            rewardCredits: 0,
-          });
+          const existingReferral = await Referral.findOne({ referredProvider: existingUser._id });
+          if (!existingReferral) {
+            await Referral.create({
+              referrer: referringUser._id,
+              referredProvider: existingUser._id,
+              referralCode: enteredReferralCode.trim().toUpperCase(),
+              status: 'PENDING',
+              rewardCredits: 0,
+            });
+          }
         }
       }
 
-      await saveUserDevice({ userId: user._id, deviceToken, deviceType: normalizedDeviceType });
+      await saveUserDevice({ userId: existingUser._id, deviceToken, deviceType: normalizedDeviceType });
 
       await sendEmail({
-        email: user.email,
+        email: existingUser.email,
         subject: 'OTP Verification - Provider App',
-        html: `<h2>Hello ${user.firstName},</h2><p>Your OTP for verification is:</p><h1 style="letter-spacing: 5px;">${otp}</h1><p>This OTP is valid for 10 minutes.</p>`,
+        html: `<h2>Hello ${existingUser.firstName},</h2><p>Your new OTP for verification is:</p><h1 style="letter-spacing: 5px;">${otp}</h1><p>This OTP is valid for 10 minutes.</p>`,
       });
 
-      const token = generateToken(user);
-
-      return res.status(201).json({
-        success: true,
-        message: 'Registration successful. OTP sent to your email.',
-        token,
-        data: {
-          userId: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          countryCode: user.countryCode, // <--- Returned
-          mobile: user.mobile,
-          role: user.role,
-          referralCode: user.referralCode,
-          referredBy: user.referredBy,
-          profileImage: user.profileImage,
-          location: user.location || null,
-          isVerified: user.isVerified,
-        },
-      });
-
-    } catch (error) {
-      console.error('Register Error:', error);
-      if (error.code === 11000) {
-        return res.status(400).json({ success: false, message: 'Email or Mobile number already registered' });
-      }
-      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
-    }
-  },
-
-  // ============================================================
-  // UPDATE PROFILE API
-  // ============================================================
-  updateProfile: async (req, res) => {
-    try {
-      const userId = req.user.id;
-
-      if (!userId) {
-        return res.status(401).json({ success: false, message: 'Unauthorized' });
-      }
-
-      const {
-        firstName,
-        lastName,
-        mobile,
-        countryCode, // <--- Extracted
-        email,
-        latitude,
-        longitude,
-        locationName,
-        profileImage,
-      } = req.body;
-
-      const user = await User.findById(userId);
-
-      if (!user) {
-        return res.status(404).json({ success: false, message: 'User not found' });
-      }
-
-      if (email !== undefined) {
-        if (!email || !email.trim()) return res.status(400).json({ success: false, message: 'Email is required' });
-        const normalizedEmail = email.trim().toLowerCase();
-        const existingEmail = await User.findOne({ email: normalizedEmail, _id: { $ne: userId } });
-        if (existingEmail) return res.status(400).json({ success: false, message: 'Email already registered' });
-        user.email = normalizedEmail;
-      }
-
-      if (mobile !== undefined) {
-        const normalizedMobile = mobile.trim();
-        if (!/^[0-9]{10}$/.test(normalizedMobile)) return res.status(400).json({ success: false, message: 'Please enter a valid 10 digit mobile number' });
-        const existingMobile = await User.findOne({ mobile: normalizedMobile, _id: { $ne: userId } });
-        if (existingMobile) return res.status(400).json({ success: false, message: 'Mobile number already registered' });
-        user.mobile = normalizedMobile;
-      }
-
-      if (countryCode !== undefined) {
-        user.countryCode = countryCode.trim(); // <--- Saved
-      }
-
-      if (firstName !== undefined) {
-        if (!firstName.trim()) return res.status(400).json({ success: false, message: 'First name is required' });
-        user.firstName = firstName.trim();
-      }
-
-      if (lastName !== undefined) {
-        if (!lastName.trim()) return res.status(400).json({ success: false, message: 'Last name is required' });
-        user.lastName = lastName.trim();
-      }
-
-      let imageUpdateMessage = '';
-      if (profileImage !== undefined && profileImage.trim() !== '') {
-        if (!user.profileImageHistory) user.profileImageHistory = [];
-
-        if (Number(user.role) === 1) {
-          user.profileImageHistory.push({
-            image: profileImage.trim(),
-            status: 0,
-            submittedAt: new Date()
-          });
-          imageUpdateMessage = ' Your new profile picture is under review by the admin.';
-        } else {
-          user.profileImage = profileImage.trim();
-          user.profileImageHistory.push({
-            image: profileImage.trim(),
-            status: 1,
-            submittedAt: new Date(),
-            reviewedAt: new Date()
-          });
-        }
-      }
-
-      const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
-      const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
-      const hasLocationName = locationName && locationName.trim() !== '';
-
-      if (hasLatitude || hasLongitude || hasLocationName) {
-        const existingLocation = user.location;
-        let lat = existingLocation?.coordinates?.[1];
-        let lng = existingLocation?.coordinates?.[0];
-
-        if (hasLatitude) lat = Number(latitude);
-        if (hasLongitude) lng = Number(longitude);
-
-        if (lat === undefined || lat === null || lng === undefined || lng === null) return res.status(400).json({ success: false, message: 'Both latitude and longitude are required when providing location' });
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
-        if (lat < -90 || lat > 90) return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
-        if (lng < -180 || lng > 180) return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
-
-        user.location = { type: 'Point', coordinates: [lng, lat] };
-        if (hasLocationName) {
-          user.location.name = locationName.trim();
-        } else if (existingLocation?.name) {
-          user.location.name = existingLocation.name;
-        }
-      }
-
-      await user.save();
-
-      let hasWorkDetails = false;
-      if (Number(user.role) === 1) {
-        const providerProfile = await ProviderProfile.findOne({ user: user._id }).select('_id services').lean();
-        hasWorkDetails = !!providerProfile && Array.isArray(providerProfile.services) && providerProfile.services.length > 0;
-      }
+      const token = generateToken(existingUser);
 
       return res.status(200).json({
         success: true,
-        message: `Profile updated successfully.${imageUpdateMessage}`,
+        message: 'Registration details updated. New OTP sent to your email.',
+        token,
         data: {
-          userId: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          countryCode: user.countryCode, // <--- Returned
-          mobile: user.mobile,
-          role: user.role,
-          referralCode: user.referralCode,
-          referredBy: user.referredBy,
-          profileImage: user.profileImage,
-          latestPendingImage: Number(user.role) === 1 && user.profileImageHistory?.length > 0
-            ? user.profileImageHistory.slice(-1)[0]
-            : null,
-          location: user.location || null,
-          isVerified: user.isVerified,
-          hasWorkDetails
+          userId: existingUser._id,
+          firstName: existingUser.firstName,
+          lastName: existingUser.lastName,
+          email: existingUser.email,
+          countryCode: existingUser.countryCode,
+          mobile: existingUser.mobile,
+          role: existingUser.role,
+          referralCode: existingUser.referralCode,
+          referredBy: existingUser.referredBy,
+          profileImage: existingUser.profileImage,
+          location: existingUser.location || null,
+          isVerified: existingUser.isVerified,
         },
       });
-    } catch (error) {
-      console.error('Update Profile Error:', error);
-      return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
     }
-  },
+
+    // ============================================================
+    // NEW USER
+    // ============================================================
+    let userReferralCode;
+    while (true) {
+      userReferralCode = generateReferralCode();
+      const exists = await User.findOne({ referralCode: userReferralCode });
+      if (!exists) break;
+    }
+
+    const userData = {
+      firstName: firstName.trim(),
+      lastName: normalizedLastName,
+      mobile: normalizedMobile,
+      countryCode: normalizedCountryCode,
+      email: normalizedEmail,
+      password: hashedPassword,
+      role: Number(role),
+      referralCode: userReferralCode,
+      referredBy,
+      profileImage: finalProfileImage,
+      profileImageHistory: [],
+      otp,
+      otpExpires,
+      otpType: 0,
+      otpVerified: false,
+      isVerified: false,
+    };
+
+    if (location) userData.location = location;
+    const user = await User.create(userData);
+
+    if (Number(user.role) === 1 && referredBy) {
+      const referringUser = await User.findById(referredBy).select('_id role');
+      if (referringUser && Number(referringUser.role) === 1) {
+        await Referral.create({
+          referrer: referringUser._id,
+          referredProvider: user._id,
+          referralCode: enteredReferralCode.trim().toUpperCase(),
+          status: 'PENDING',
+          rewardCredits: 0,
+        });
+      }
+    }
+
+    await saveUserDevice({ userId: user._id, deviceToken, deviceType: normalizedDeviceType });
+
+    await sendEmail({
+      email: user.email,
+      subject: 'OTP Verification - Provider App',
+      html: `<h2>Hello ${user.firstName},</h2><p>Your OTP for verification is:</p><h1 style="letter-spacing: 5px;">${otp}</h1><p>This OTP is valid for 10 minutes.</p>`,
+    });
+
+    const token = generateToken(user);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Registration successful. OTP sent to your email.',
+      token,
+      data: {
+        userId: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        countryCode: user.countryCode,
+        mobile: user.mobile,
+        role: user.role,
+        referralCode: user.referralCode,
+        referredBy: user.referredBy,
+        profileImage: user.profileImage,
+        location: user.location || null,
+        isVerified: user.isVerified,
+      },
+    });
+
+  } catch (error) {
+    console.error('Register Error:', error);
+    if (error.code === 11000) {
+      return res.status(400).json({ success: false, message: 'Email or Mobile number already registered' });
+    }
+    return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
+  }
+},
+
+// ============================================================
+// UPDATE PROFILE API
+// ============================================================
+updateProfile: async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const {
+      firstName,
+      lastName,
+      mobile,
+      countryCode,
+      email,
+      latitude,
+      longitude,
+      locationName,
+      profileImage,
+    } = req.body;
+
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (email !== undefined) {
+      if (!email || !email.trim()) return res.status(400).json({ success: false, message: 'Email is required' });
+      const normalizedEmail = email.trim().toLowerCase();
+      const existingEmail = await User.findOne({ email: normalizedEmail, _id: { $ne: userId } });
+      if (existingEmail) return res.status(400).json({ success: false, message: 'Email already registered' });
+      user.email = normalizedEmail;
+    }
+
+    if (mobile !== undefined) {
+      const normalizedMobile = mobile.trim();
+      if (!/^[0-9]{10}$/.test(normalizedMobile)) return res.status(400).json({ success: false, message: 'Please enter a valid 10 digit mobile number' });
+      const existingMobile = await User.findOne({ mobile: normalizedMobile, _id: { $ne: userId } });
+      if (existingMobile) return res.status(400).json({ success: false, message: 'Mobile number already registered' });
+      user.mobile = normalizedMobile;
+    }
+
+    if (countryCode !== undefined) {
+      user.countryCode = countryCode.trim();
+    }
+
+    if (firstName !== undefined) {
+      if (!firstName.trim()) return res.status(400).json({ success: false, message: 'First name is required' });
+      user.firstName = firstName.trim();
+    }
+
+    // Removed the requirement check for lastName
+    if (lastName !== undefined) {
+      user.lastName = lastName.trim();
+    }
+
+    let imageUpdateMessage = '';
+    if (profileImage !== undefined && profileImage.trim() !== '') {
+      if (!user.profileImageHistory) user.profileImageHistory = [];
+
+      if (Number(user.role) === 1) {
+        user.profileImageHistory.push({
+          image: profileImage.trim(),
+          status: 0,
+          submittedAt: new Date()
+        });
+        imageUpdateMessage = ' Your new profile picture is under review by the admin.';
+      } else {
+        user.profileImage = profileImage.trim();
+        user.profileImageHistory.push({
+          image: profileImage.trim(),
+          status: 1,
+          submittedAt: new Date(),
+          reviewedAt: new Date()
+        });
+      }
+    }
+
+    const hasLatitude = latitude !== undefined && latitude !== null && latitude !== '';
+    const hasLongitude = longitude !== undefined && longitude !== null && longitude !== '';
+    const hasLocationName = locationName && locationName.trim() !== '';
+
+    if (hasLatitude || hasLongitude || hasLocationName) {
+      const existingLocation = user.location;
+      let lat = existingLocation?.coordinates?.[1];
+      let lng = existingLocation?.coordinates?.[0];
+
+      if (hasLatitude) lat = Number(latitude);
+      if (hasLongitude) lng = Number(longitude);
+
+      if (lat === undefined || lat === null || lng === undefined || lng === null) return res.status(400).json({ success: false, message: 'Both latitude and longitude are required when providing location' });
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ success: false, message: 'Latitude and longitude must be valid numbers' });
+      if (lat < -90 || lat > 90) return res.status(400).json({ success: false, message: 'Latitude must be between -90 and 90' });
+      if (lng < -180 || lng > 180) return res.status(400).json({ success: false, message: 'Longitude must be between -180 and 180' });
+
+      user.location = { type: 'Point', coordinates: [lng, lat] };
+      if (hasLocationName) {
+        user.location.name = locationName.trim();
+      } else if (existingLocation?.name) {
+        user.location.name = existingLocation.name;
+      }
+    }
+
+    await user.save();
+
+    let hasWorkDetails = false;
+    if (Number(user.role) === 1) {
+      const providerProfile = await ProviderProfile.findOne({ user: user._id }).select('_id services').lean();
+      hasWorkDetails = !!providerProfile && Array.isArray(providerProfile.services) && providerProfile.services.length > 0;
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Profile updated successfully.${imageUpdateMessage}`,
+      data: {
+        userId: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        countryCode: user.countryCode,
+        mobile: user.mobile,
+        role: user.role,
+        referralCode: user.referralCode,
+        referredBy: user.referredBy,
+        profileImage: user.profileImage,
+        latestPendingImage: Number(user.role) === 1 && user.profileImageHistory?.length > 0
+          ? user.profileImageHistory.slice(-1)[0]
+          : null,
+        location: user.location || null,
+        isVerified: user.isVerified,
+        hasWorkDetails
+      },
+    });
+  } catch (error) {
+    console.error('Update Profile Error:', error);
+    return res.status(500).json({ success: false, message: 'Something went wrong', error: error.message });
+  }
+}
   // ============================================================
   // ============================================================
   // LOGIN
