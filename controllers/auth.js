@@ -50,7 +50,7 @@ module.exports = {
     try {
       const required = [
         'firstName',
-        'lastName',
+    
         'mobile',
         'email',
         'password',
