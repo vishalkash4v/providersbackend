@@ -173,7 +173,7 @@ async function increaseStorageUsage(
       },
 
       {
-        new: true,
+        returnDocument: 'after', // <-- FIXED HERE
         upsert: true,
       }
     );
