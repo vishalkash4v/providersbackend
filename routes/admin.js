@@ -47,8 +47,8 @@ router.delete('/services/:id', isAdmin, adminController.deleteService);
 router.get('/support', isAdmin, adminController.getSupportTickets);
 // ... existing admin routes ...
 router.post('/policy', isAdmin, adminController.upsertPolicy); // Handles both Create & Update
-router.get('/policies', isAdmin, adminController.getPolicies);
-router.get('/policy/:type', isAdmin, adminController.getPolicies);
+router.get('/policies', adminController.getPolicies);
+router.get('/policy/:type', adminController.getPolicies);
 router.delete('/policy/:id', isAdmin, adminController.deletePolicy);
 // ============================================================
 // ADMIN: PROFILE IMAGE APPROVAL ROUTES
