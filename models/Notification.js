@@ -19,8 +19,7 @@ const notificationSchema =
       // ==========================================================
 
       type: {
-        type: String,    
-
+        type: String,
         required: true,
       },
 

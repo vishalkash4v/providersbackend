@@ -6,9 +6,16 @@ const router =
 const uploadController =
   require('../controllers/extras');
 
-const {
-  authenticateToken,
-} = require('../middleware/jwt');
+
+const ensureDB =
+    require('../middleware/db');
+
+
+// ============================================================
+// DATABASE MIDDLEWARE
+// ============================================================
+
+router.use(ensureDB);
 
 router.post(
   '/upload',  

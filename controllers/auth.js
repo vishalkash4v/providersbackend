@@ -18,7 +18,9 @@ const axios = require("axios");
 
 const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY;
 const sendSms = require('../utils/sendSms');
-
+const admin = require('../config/firebase'); // Agar firebase-admin pehle se app.js mein initialize hai, toh yeh directly kaam karega
+const { getAuth } = require('firebase-admin/auth');
+const firebaseApp = require('../config/config')
 const {
   generateReferralCode,
 } = require('../utils/referral');
@@ -30,6 +32,14 @@ const jwt = require('jsonwebtoken');
 const TokenBlacklist = require('../models/TokenBlacklist');
 
 const Support = require('../models/Support');
+
+
+const firebaseAdmin = require('firebase-admin');
+
+// Agar initialized nahi hai toh kar dega, aur undefined wala error bhi nahi aayega
+if (firebaseAdmin && firebaseAdmin.apps && firebaseAdmin.apps.length === 0) {
+    firebaseAdmin.initializeApp();
+}
 
 module.exports = {
 
@@ -665,6 +675,61 @@ module.exports = {
     }
   },
 
+// ============================================================
+// VERIFY FIREBASE TOKEN ONLY (Testing / Manual Check)
+// ============================================================
+verifyFirebaseToken: async (req, res) => {
+  try {
+    const { firebaseToken } = req.body;
+    console.log("TOKEN:", firebaseToken);
+console.log("TOKEN TYPE:", typeof firebaseToken);
+console.log("TOKEN LENGTH:", firebaseToken?.length);
+
+    if (!firebaseToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Firebase token is required'
+      });
+    }
+
+    // Get Firebase Auth instance from your Firebase App
+    const auth = getAuth(firebaseApp);
+
+    // Verify Firebase ID Token
+    const decodedToken = await auth.verifyIdToken(firebaseToken);
+
+    console.log('Firebase Token Details:', decodedToken);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Token is Valid! 🎉',
+      data: {
+        uid: decodedToken.uid,
+
+        mobile: decodedToken.phone_number || null,
+
+        email: decodedToken.email || null,
+
+        name: decodedToken.name || null,
+
+        picture: decodedToken.picture || null,
+
+        emailVerified: decodedToken.email_verified || false,
+
+        provider: decodedToken.firebase?.sign_in_provider || null
+      }
+    });
+
+  } catch (error) {
+    console.error('Verify Token Error:', error);
+
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid or Expired Token ❌',
+      error: error.message
+    });
+  }
+},
 
  
   // ============================================================
