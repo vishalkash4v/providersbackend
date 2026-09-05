@@ -27,5 +27,8 @@
   },
   "devDependencies": {
     "uglify-js": "^3.19.3"
+  },
+  "overrides": {
+    "jose": "4.15.9"
   }
 }
