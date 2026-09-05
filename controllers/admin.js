@@ -462,7 +462,9 @@ module.exports = {
     // READ ALL
     getPolicies: async (req, res) => {
         try {
-            const policies = await Policy.find().lean();
+            const { type } = req.params;
+            const query = type ? { type: type.toUpperCase() } : {};
+            const policies = await Policy.find(query).lean();
             return res.status(200).json({ success: true, data: policies });
         } catch (error) {
             return res.status(500).json({ success: false, error: error.message });
